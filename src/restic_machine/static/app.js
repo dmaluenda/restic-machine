@@ -15,6 +15,7 @@ const state = {
   showRemoved: false,
   detailPath: null,
   lastDone: 0,
+  stopped: false,
 };
 let statusTimer = null;
 
@@ -81,6 +82,14 @@ const joinPath = (dir, name) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
 const parentOf = (path) => (path.lastIndexOf("/") <= 0 ? "/" : path.slice(0, path.lastIndexOf("/")));
 const current = () => state.snapshots.find((s) => s.id === state.snapshot);
 
+function stopped(message) {
+  state.stopped = true;
+  clearTimeout(statusTimer);
+  for (const button of document.querySelectorAll(".topbar button")) button.disabled = true;
+  $("#index-state").textContent = "Stopped";
+  showBanner(message, true);
+}
+
 function showBanner(message, warning = false) {
   const banner = $("#banner");
   banner.hidden = !message;
@@ -104,12 +113,14 @@ function writeHash(push) {
 
 async function refreshStatus() {
   clearTimeout(statusTimer);
+  if (state.stopped) return;
   let status;
   try {
     status = await api("/api/status");
   } catch (error) {
-    showBanner(`Can't reach restic-machine: ${error.message}`, true);
-    statusTimer = setTimeout(refreshStatus, 10000);
+    // A new start gets a new address and key, so this page can't reconnect: say so and stop.
+    stopped("restic-machine is not running any more (it stops by itself a while after its last " +
+      "tab is closed). Start it again to keep browsing.");
     return;
   }
   const wasRunning = state.status?.indexing.running;
@@ -491,6 +502,14 @@ function bind() {
       showBanner(error.message, true);
     }
     refreshStatus();
+  });
+  $("#stop").addEventListener("click", async () => {
+    try {
+      await post("/api/stop");
+    } catch {
+      // it may be gone already
+    }
+    stopped("restic-machine has stopped. You can close this tab, and start it again any time.");
   });
   $("#series").addEventListener("change", (event) => {
     state.series = Number(event.target.value);

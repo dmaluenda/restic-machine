@@ -30,7 +30,8 @@ class ServerTest(unittest.TestCase):
         self.app = server.App(db.index_file(Path(tmp.name), "f" * 64), self.restic, "f" * 64)
         self.httpd = server.make_server(self.app)
         self.port = self.httpd.server_address[1]
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.serving = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.serving.start()
         self.addCleanup(self.httpd.server_close)
         self.addCleanup(self.httpd.shutdown)
         self.cookie = f"restic_machine_{self.port}={self.app.token}"
@@ -106,12 +107,50 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(response.status, 404)
         self.assertIn("not in the index", json.loads(body)["error"])
 
+    def test_stop_button(self):
+        response, _ = self.request("/api/stop", "POST", cookie=self.cookie, headers={"X-Restic-Machine": "1"})
+        self.assertEqual(response.status, 200)
+        self.serving.join(10)
+        self.assertFalse(self.serving.is_alive())
+
+    def test_runtime_file_finds_the_running_server(self):
+        runtime = self.app.index_path.with_name("server.json")
+        server.write_runtime(runtime, self.port, self.app.token)
+        self.assertEqual(server.running_instance(runtime), server.url_of(self.port, self.app.token))
+        server.remove_runtime(runtime, "someone else's token")
+        self.assertTrue(runtime.exists())
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.assertIsNone(server.running_instance(runtime))
+        server.remove_runtime(runtime, self.app.token)
+        self.assertFalse(runtime.exists())
+
     def test_source_code_is_offered(self):
         response, body = self.request("/source", cookie=self.cookie)
         self.assertEqual(response.status, 200)
         names = zipfile.ZipFile(io.BytesIO(body)).namelist()
         self.assertIn("restic_machine/server.py", names)
         self.assertIn("restic_machine/static/app.js", names)
+
+
+class IdleTest(unittest.TestCase):
+    def test_stops_by_itself_when_no_page_asks_for_a_while(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = server.App(Path(tmp) / "index.sqlite", FakeRestic(), "f" * 64, idle_timeout=0.2)
+            httpd = server.make_server(app)
+            serving = threading.Thread(target=httpd.serve_forever, daemon=True)
+            serving.start()
+            serving.join(10)
+            httpd.server_close()
+            self.assertFalse(serving.is_alive())
+
+    def test_not_while_indexing(self):
+        app = server.App(Path("unused"), FakeRestic(), "f" * 64, idle_timeout=60)
+        app.last_seen -= 120
+        app.indexing["running"] = True
+        self.assertFalse(app.idle())
+        app.indexing["running"] = False
+        self.assertTrue(app.idle())
 
 
 if __name__ == "__main__":

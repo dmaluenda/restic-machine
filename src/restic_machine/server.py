@@ -9,12 +9,17 @@ browser gets it once, in the address it is opened with, and keeps it in a SameSi
 cookie; requests without it are refused, and so is any Host header other than our own
 address (which defeats DNS rebinding). Requests that change something are POST and must
 also carry a custom header, which a page from another origin can't add.
+
+The address of a running server is written to a runtime file next to the index, so a
+second launch opens the browser on it instead of starting another one.
 """
 
 import hmac
+import http.client
 import http.server
 import io
 import json
+import os
 import secrets
 import threading
 import time
@@ -45,18 +50,28 @@ _CSP = ("default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri '
 class App:
     """What the request handlers share: the index, restic and the state of indexing."""
 
-    def __init__(self, index_path: Path, restic, repository_id: str, available: bool = True):
+    def __init__(self, index_path: Path, restic, repository_id: str, available: bool = True,
+                 idle_timeout: float | None = None):
         self.index_path = index_path
         self.restic = restic
         self.repository_id = repository_id
         self.token = secrets.token_urlsafe(32)
         self.indexing = {"running": False, "done": 0, "total": 0, "current": None, "error": None,
                          "unavailable": not available, "finished_at": None}
+        # Stop by itself once no page has asked anything for this many seconds (None: never).
+        # An open page asks for the status at least every 30 s.
+        self.idle_timeout = idle_timeout
+        self.last_seen = time.monotonic()
+        self.stop = lambda: None  # set by make_server
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
     def connect(self):
         return db.connect(self.index_path)
+
+    def idle(self) -> bool:
+        return (self.idle_timeout is not None and not self.indexing["running"]
+                and time.monotonic() - self.last_seen > self.idle_timeout)
 
     def start_indexing(self) -> bool:
         """Read new snapshots in the background; False if that is already happening."""
@@ -151,6 +166,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._authorized():
             raise ApiError(HTTPStatus.FORBIDDEN,
                            "not authorized: open restic-machine with the link that `restic-machine serve` printed")
+        self.app.last_seen = time.monotonic()
 
     def _send(self, body: bytes, content_type: str, status=HTTPStatus.OK, headers=()) -> None:
         self.send_response(status)
@@ -212,6 +228,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise ApiError(HTTPStatus.FORBIDDEN, "cross-site request refused")
         if path == "/api/index":
             self._send_json({"started": self.app.start_indexing()})
+        elif path == "/api/stop":
+            self._send_json({"stopping": True})
+            self.app.stop()
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such action: {path}")
 
@@ -275,4 +294,59 @@ def make_server(app: App, port: int = 0) -> http.server.ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     httpd.daemon_threads = True
+    # shutdown() waits for serve_forever() to return, so it can't run on a request's thread.
+    app.stop = lambda: threading.Thread(target=httpd.shutdown, daemon=True).start()
+    if app.idle_timeout is not None:
+        threading.Thread(target=_stop_when_idle, args=(app,), name="idle", daemon=True).start()
     return httpd
+
+
+def _stop_when_idle(app: App) -> None:
+    while True:
+        time.sleep(min(30.0, app.idle_timeout / 4))
+        if app.idle():
+            print(f"no page open for {app.idle_timeout / 60:g} min: stopping", flush=True)
+            app.stop()
+            return
+
+
+def url_of(port: int, token: str) -> str:
+    return f"http://127.0.0.1:{port}/?token={token}"
+
+
+def write_runtime(path: Path, port: int, token: str) -> None:
+    """Record where this server listens; private to the user (the token is the key)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"port": port, "token": token, "pid": os.getpid()}, f)
+    os.replace(tmp, path)
+
+
+def remove_runtime(path: Path, token: str) -> None:
+    """Remove the runtime file if it is still ours."""
+    try:
+        if json.loads(path.read_text(encoding="utf-8")).get("token") == token:
+            path.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def running_instance(path: Path) -> str | None:
+    """The address of the server a runtime file points to, if it is still answering."""
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+        port, token = int(info["port"]), str(info["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        conn.request("GET", "/api/status", headers={
+            "Host": f"127.0.0.1:{port}", "Cookie": f"restic_machine_{port}={token}"})
+        alive = conn.getresponse().status == HTTPStatus.OK
+    except OSError:
+        alive = False
+    finally:
+        conn.close()
+    return url_of(port, token) if alive else None

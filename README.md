@@ -40,9 +40,15 @@ In your browser you get:
 ## Usage
 
 Configure the repository (see below), then start it from a clone, without installing
-anything: double-click **`restic-machine.cmd`** on Windows, or run **`./restic-machine.sh`**
+anything: double-click **`restic-machine.pyw`** on Windows, or run **`./restic-machine.sh`**
 on Linux and macOS. It reads any new snapshots in the background and opens your browser.
-Or install it (`pip install .`) and run `restic-machine serve`.
+Or install it (`pip install .`) and run `restic-machine-app` (or `restic-machine serve` in a
+terminal).
+
+On Windows it runs without any window of its own: just the browser tab. Starting it again
+while it runs only opens the tab again. It stops by itself ten minutes after you close its
+last tab, or right away with the **Stop** button. If it can't start, a dialog says why, and
+everything it would have printed goes to `~/.cache/restic-machine/restic-machine.log`.
 
 The first run reads every snapshot (about half a minute per snapshot for a home folder of
 several hundred thousand files) and you can browse what is already read meanwhile; later

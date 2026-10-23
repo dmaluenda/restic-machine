@@ -82,6 +82,8 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
     serve.add_argument("--no-browser", action="store_true", help="don't open a browser, just print the address")
     serve.add_argument("--no-index", action="store_true", help="don't read new snapshots on start")
+    serve.add_argument("--idle-timeout", type=float, default=0, metavar="MINUTES",
+                       help="stop this long after the last browser tab is closed (default: never)")
     serve.set_defaults(command=cmd_serve)
     return parser
 
@@ -177,13 +179,24 @@ def cmd_info(cfg: config.Config, args) -> int:
 def cmd_serve(cfg: config.Config, args) -> int:
     con, restic, repository_id, available = _open(cfg, offline_ok=True)
     con.close()
-    app = server.App(db.index_file(cfg.data_dir, repository_id), restic, repository_id, available)
+    index_path = db.index_file(cfg.data_dir, repository_id)
+    runtime = index_path.with_name("server.json")
+    running = server.running_instance(runtime)
+    if running:
+        print(f"restic-machine is already running at {running}", flush=True)
+        if not args.no_browser:
+            webbrowser.open(running)
+        return 0
+
+    idle_timeout = args.idle_timeout * 60 if args.idle_timeout else None
+    app = server.App(index_path, restic, repository_id, available, idle_timeout)
     httpd = server.make_server(app, args.port)
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/?token={app.token}"
+    url = server.url_of(httpd.server_address[1], app.token)
+    server.write_runtime(runtime, httpd.server_address[1], app.token)
     if available and not args.no_index:
         app.start_indexing()
     print(f"restic-machine is running at {url}\n"
-          "(the link is the key: keep it private). Press Ctrl+C to stop.", flush=True)
+          "(the link is the key: keep it private). Press Ctrl+C or the Stop button to stop.", flush=True)
     if not args.no_browser:
         webbrowser.open(url)
     try:
@@ -192,6 +205,8 @@ def cmd_serve(cfg: config.Config, args) -> int:
         pass
     finally:
         httpd.server_close()
+        server.remove_runtime(runtime, app.token)
+    print("restic-machine stopped", flush=True)
     return 0
 
 

@@ -24,3 +24,6 @@ classifiers = [
 
 [project.scripts]
 restic-machine = "restic_machine.cli:main"
+
+[project.gui-scripts]
+restic-machine-app = "restic_machine.desktop:main"
