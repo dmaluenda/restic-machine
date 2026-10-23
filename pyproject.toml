@@ -1,0 +1,26 @@
+[build-system]
+requires = ["flit_core>=3.12,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "restic-machine"
+dynamic = ["version", "description"]
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"
+authors = [{ name = "David Maluenda" }]
+dependencies = []
+keywords = ["restic", "backup", "snapshots", "browser"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Archiving :: Backup",
+]
+
+[project.scripts]
+restic-machine = "restic_machine.cli:main"

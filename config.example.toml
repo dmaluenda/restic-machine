@@ -1,0 +1,27 @@
+# restic-machine configuration (all settings are optional).
+#
+# Copy it to ~/.config/restic-machine/config.toml, or point RESTIC_MACHINE_CONFIG at it.
+# Without a config file restic-machine uses restic's own environment variables
+# (RESTIC_REPOSITORY, RESTIC_PASSWORD_FILE, ...).
+#
+# restic-machine never stores your password: give restic a password file or a command.
+
+[restic]
+# binary = "/usr/local/bin/restic"             # default: `restic` from PATH
+# repository = "sftp:backup@nas:/srv/restic"   # -> RESTIC_REPOSITORY
+# repository_file = "~/.config/restic/repo"    # -> RESTIC_REPOSITORY_FILE
+# password_file = "~/.config/restic/password"  # -> RESTIC_PASSWORD_FILE
+# password_command = "pass show restic"        # -> RESTIC_PASSWORD_COMMAND
+
+# Any other variable restic understands, e.g. backend settings.
+# [restic.env]
+# AWS_PROFILE = "backup"
+
+[index]
+# Where the index lives (one SQLite file per repository). It lists every file name in
+# your backups: keep it private, and outside the paths you back up if you can.
+# data_dir = "~/.cache/restic-machine"
+
+# Snapshots removed by `restic forget` disappear from the timeline at once, but stay in
+# the index this many days, in case you want to look into what happened.
+# forgotten_retention_days = 30

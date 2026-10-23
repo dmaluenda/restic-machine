@@ -1,0 +1,4 @@
+# LF in the repository and in checkouts (the .sh launchers need it); Windows scripts keep CRLF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

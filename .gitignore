@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Never commit local configuration or an index: they hold repository details and every
+# file name in your backups.
+config.toml
+*.sqlite
+*.sqlite-*
+repositories.json
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
