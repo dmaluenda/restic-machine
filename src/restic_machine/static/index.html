@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 David Maluenda -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>restic-machine</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>restic-machine</h1>
+    <span id="repo" class="muted"></span>
+    <select id="series" aria-label="Backup series" hidden></select>
+    <span class="spacer"></span>
+    <span id="index-state" class="muted" aria-live="polite"></span>
+    <button id="reindex" type="button">Update index</button>
+  </header>
+
+  <div id="banner" class="banner" role="status" hidden></div>
+
+  <section class="timeline" aria-label="Snapshots">
+    <div id="bars" class="bars" role="listbox" tabindex="0" aria-label="Snapshots, oldest to newest"></div>
+    <div id="snapshot-info" class="snapshot-info"></div>
+  </section>
+
+  <nav id="crumbs" class="crumbs" aria-label="Folder"></nav>
+
+  <main class="content">
+    <section class="listing">
+      <table id="listing">
+        <thead>
+          <tr>
+            <th data-sort="name" scope="col">Name</th>
+            <th data-sort="size" scope="col" class="num">Size</th>
+            <th data-sort="files" scope="col" class="num">Files</th>
+            <th data-sort="mtime_us" scope="col">Modified</th>
+            <th data-sort="status" scope="col">Change</th>
+            <th scope="col"><span class="visually-hidden">History</span></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="listing-note" class="muted" hidden></p>
+      <label class="toggle"><input type="checkbox" id="show-removed"> Show what was removed since the previous snapshot <span id="removed-count" class="muted"></span></label>
+    </section>
+
+    <aside id="detail" class="detail" hidden>
+      <div class="detail-head">
+        <h2 id="detail-title"></h2>
+        <button id="detail-close" type="button" class="icon" aria-label="Close">&times;</button>
+      </div>
+      <p id="detail-path" class="muted path"></p>
+      <div id="chart" class="chart"></div>
+      <table id="versions" class="versions">
+        <thead><tr><th scope="col">From</th><th scope="col">Until</th><th scope="col" class="num">Size</th><th scope="col" class="num">Files</th><th scope="col">Modified</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </aside>
+  </main>
+
+  <footer class="footer">
+    <span id="attribution">restic-machine by David Maluenda</span> ·
+    <a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="noreferrer" target="_blank">AGPL-3.0-or-later</a> ·
+    <a href="/source">Source code</a>
+    <span id="version" class="muted"></span>
+  </footer>
+</body>
+</html>

@@ -5,13 +5,16 @@
 
 import argparse
 import json
+import logging
 import sqlite3
 import sys
+import webbrowser
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
-from . import __version__, config, db, query
+from . import __version__, config, db, query, server
 from .indexer import IndexBusy, Indexer
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -25,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors="backslashreplace")
+    logging.basicConfig(format="restic-machine: %(message)s", level=logging.INFO)
     try:
         cfg = config.load(args.config)
         if args.repo:
@@ -73,10 +77,23 @@ def _parser() -> argparse.ArgumentParser:
 
     info = commands.add_parser("info", help="show where the index is and what it holds")
     info.set_defaults(command=cmd_info)
+
+    serve = commands.add_parser("serve", help="open the browser interface (and update the index)")
+    serve.add_argument("--port", type=int, default=0, help="port on 127.0.0.1 (default: any free one)")
+    serve.add_argument("--no-browser", action="store_true", help="don't open a browser, just print the address")
+    serve.add_argument("--no-index", action="store_true", help="don't read new snapshots on start")
+    serve.set_defaults(command=cmd_serve)
     return parser
 
 
-def _open(cfg: config.Config, offline_ok: bool) -> tuple[sqlite3.Connection, Restic]:
+class Opened(NamedTuple):
+    con: sqlite3.Connection
+    restic: Restic
+    repository_id: str
+    available: bool  # False: the repository can't be read now, only its index
+
+
+def _open(cfg: config.Config, offline_ok: bool) -> Opened:
     """The index of the configured repository. With offline_ok, an unreachable repository
     still gives access to its index as last updated."""
     label = cfg.repository_label()
@@ -85,23 +102,25 @@ def _open(cfg: config.Config, offline_ok: bool) -> tuple[sqlite3.Connection, Res
     try:
         repository_id = restic.repository_id()
         db.remember_repository(cfg.data_dir, label, repository_id)
+        available = True
     except RepositoryUnavailable as e:
         repository_id = db.known_repository(cfg.data_dir, label) if offline_ok else None
         if repository_id is None:
             raise
         _err(f"warning: repository unavailable ({e}); showing the index as last updated")
-    return db.open_index(cfg.data_dir, repository_id), restic
+        available = False
+    return Opened(db.open_index(cfg.data_dir, repository_id), restic, repository_id, available)
 
 
 def cmd_index(cfg: config.Config, args) -> int:
-    con, restic = _open(cfg, offline_ok=False)
+    con, restic, _, _ = _open(cfg, offline_ok=False)
     with closing(con):
         Indexer(con, restic, progress=_print_progress).run(limit=args.limit)
     return 0
 
 
 def cmd_snapshots(cfg: config.Config, args) -> int:
-    con, _ = _open(cfg, offline_ok=True)
+    con = _open(cfg, offline_ok=True).con
     with closing(con):
         rows = query.snapshots(con, include_forgotten=args.all)
     several = len({row["series"] for row in rows}) > 1
@@ -120,20 +139,22 @@ def cmd_snapshots(cfg: config.Config, args) -> int:
 
 
 def cmd_ls(cfg: config.Config, args) -> int:
-    con, _ = _open(cfg, offline_ok=True)
+    con = _open(cfg, offline_ok=True).con
     with closing(con):
         snap = query.find_snapshot(con, args.snapshot)
-        entries = query.list_dir(con, snap, args.path)
+        entries = query.list_dir(con, snap, args.path, query.previous_snapshot(con, snap))
+    marks = {"added": "+", "modified": "~", "changed": "*"}
     for entry in entries:
-        is_dir = entry["type"] == db.DIR
-        size = "" if is_dir else _size(entry["size"])
+        is_dir = entry["type"] == "dir"
+        files = f"{entry['files']:,} files" if is_dir else ""
         name = entry["name"] + ("/" if is_dir else "")
-        print(f"{db.NODE_TYPES[entry['type']][0]}  {size:>10}  {_mtime(entry['mtime_us'])}  {name}")
+        print(f"{marks.get(entry['status'], ' ')} {entry['type'][0]}  {_size(entry['size']):>10}"
+              f"  {files:>13}  {_mtime(entry['mtime_us'])}  {name}")
     return 0
 
 
 def cmd_info(cfg: config.Config, args) -> int:
-    con, _ = _open(cfg, offline_ok=True)
+    con = _open(cfg, offline_ok=True).con
     with closing(con):
         repository_id = con.execute("SELECT value FROM meta WHERE key = 'repository_id'").fetchone()[0]
         (path,) = [row["file"] for row in con.execute("PRAGMA database_list") if row["name"] == "main"]
@@ -150,6 +171,27 @@ def cmd_info(cfg: config.Config, args) -> int:
     print(f"contents    {paths:,} paths, {versions:,} versions")
     if cfg.source:
         print(f"config      {cfg.source}")
+    return 0
+
+
+def cmd_serve(cfg: config.Config, args) -> int:
+    con, restic, repository_id, available = _open(cfg, offline_ok=True)
+    con.close()
+    app = server.App(db.index_file(cfg.data_dir, repository_id), restic, repository_id, available)
+    httpd = server.make_server(app, args.port)
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/?token={app.token}"
+    if available and not args.no_index:
+        app.start_indexing()
+    print(f"restic-machine is running at {url}\n"
+          "(the link is the key: keep it private). Press Ctrl+C to stop.", flush=True)
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
     return 0
 
 

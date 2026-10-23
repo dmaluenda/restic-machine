@@ -4,8 +4,16 @@ Browse the history of a [restic](https://restic.net) repository: a timeline of y
 snapshots and, for any of them, the tree of files as it was then, with sizes and
 modification times.
 
-> **Status: early development.** The indexer and a command line work; the web interface
-> (timeline + tree, download and restore) comes next.
+> **Status: early development.** Browsing works (timeline, tree, sizes over time);
+> downloading and restoring files comes next.
+
+In your browser you get:
+
+- **a timeline** of the snapshots, each bar as tall as the number of changes it brought,
+  so an unusual one (thousands of files changed at once) stands out;
+- **the folder tree** as it was in the chosen snapshot, with the size and file count of
+  every folder, and what is new, modified or removed since the previous snapshot;
+- **the size of any file or folder over time**, and the dates on which it changed.
 
 ## How it works
 
@@ -19,6 +27,9 @@ modification times.
   changes, not with the number of snapshots. New snapshots are read incrementally.
 - **Snapshots you forget** disappear from the timeline but stay in the index for a while,
   so you can look into what happened.
+- **It runs on your computer only.** The web interface listens on 127.0.0.1 and asks for a
+  random key that changes every time it starts (it is in the link it opens), so other web
+  pages and other users can't use it.
 - **No dependencies:** Python 3.11+ standard library only.
 
 ## Requirements
@@ -28,19 +39,23 @@ modification times.
 
 ## Usage
 
-From a clone, without installing anything:
+Configure the repository (see below), then start it from a clone, without installing
+anything: double-click **`restic-machine.cmd`** on Windows, or run **`./restic-machine.sh`**
+on Linux and macOS. It reads any new snapshots in the background and opens your browser.
+Or install it (`pip install .`) and run `restic-machine serve`.
+
+The first run reads every snapshot (about half a minute per snapshot for a home folder of
+several hundred thousand files) and you can browse what is already read meanwhile; later
+runs only read the new ones. There is a command line too:
 
 ```sh
-PYTHONPATH=src python -m restic_machine index        # read new snapshots into the index
-PYTHONPATH=src python -m restic_machine snapshots    # list them
-PYTHONPATH=src python -m restic_machine ls latest /home/me
+restic-machine index                  # read new snapshots (e.g. right after each backup)
+restic-machine snapshots              # list them
+restic-machine ls latest /home/me     # a folder as it was in a snapshot
+restic-machine info                   # where the index is and what it holds
 ```
 
-Or install it (`pip install .`) and use the `restic-machine` command.
-
-The first `index` reads every snapshot (about half a minute per snapshot for a home folder
-of several hundred thousand files); later runs only read the new ones, so it can run right
-after each backup.
+(From a clone without installing: `PYTHONPATH=src python -m restic_machine ...`.)
 
 ## Configuration
 
@@ -55,7 +70,8 @@ settings in a file instead, copy [`config.example.toml`](config.example.toml) to
 | Index | `~/.cache/restic-machine/` | `RESTIC_MACHINE_DATA`, `data_dir` |
 
 The index lists every file name in your backups. It never goes inside the package or a
-git checkout; keep it private.
+git checkout; keep it private. When a new version changes its format, the index is upgraded
+in place on first use (a copy of the old one is kept next to it), never rebuilt.
 
 ## Development
 

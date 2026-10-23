@@ -70,7 +70,7 @@ class RealResticTest(unittest.TestCase):
         src = restic_path(self.src)
 
         def files(snap):
-            return {r["name"]: r["size"] for r in query.list_dir(con, snap, src) if r["type"] != db.DIR}
+            return {r["name"]: r["size"] for r in query.list_dir(con, snap, src) if r["type"] != "dir"}
 
         self.assertEqual({r["name"] for r in query.list_dir(con, first, src)}, {"a.txt", "sub"})
         self.assertEqual(files(first), {"a.txt": 5})

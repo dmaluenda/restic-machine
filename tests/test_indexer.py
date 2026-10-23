@@ -5,6 +5,7 @@
 
 import tempfile
 import unittest
+from collections import defaultdict
 from pathlib import Path
 
 from restic_machine import db, query
@@ -78,6 +79,24 @@ class IndexerTest(unittest.TestCase):
     def snapshot_row(self, n):
         return self.con.execute("SELECT * FROM snapshot WHERE restic_id = ?", (snapshot_id(n),)).fetchone()
 
+    def assert_totals(self):
+        """dir_total must match the sums computed from each snapshot's own listing."""
+        for restic_id, (_, snapshot_nodes) in self.restic.repo.items():
+            row = self.con.execute("SELECT * FROM snapshot WHERE restic_id = ?", (restic_id,)).fetchone()
+            expected = defaultdict(lambda: [0, 0])
+            for node in snapshot_nodes:
+                if node["type"] == "file":
+                    parts = node["path"].strip("/").split("/")
+                    for depth in range(len(parts)):  # the root and every parent directory
+                        expected["/" + "/".join(parts[:depth])][0] += node["size"]
+                        expected["/" + "/".join(parts[:depth])][1] += 1
+            for directory, totals in expected.items():
+                got = self.con.execute(
+                    "SELECT size, files FROM dir_total WHERE path = ? AND series = ?"
+                    " AND first_seq <= ? AND last_seq >= ?",
+                    (query.resolve_path(self.con, directory), row["series"], row["seq"], row["seq"])).fetchone()
+                self.assertEqual(tuple(got), tuple(totals), f"{directory} in snapshot {restic_id[-2:]}")
+
     def test_unchanged_file_is_a_single_row(self):
         for n in range(1, 6):
             self.restic.add(n, f"2026-01-0{n}T10:00:00Z", {"/data/a": 1})
@@ -95,6 +114,7 @@ class IndexerTest(unittest.TestCase):
         row = self.snapshot_row(2)
         self.assertEqual((row["n_entries"], row["n_added"], row["n_modified"], row["n_removed"]), (3, 1, 1, 1))
         self.assertIsNone(self.snapshot_row(1)["n_added"])
+        self.assert_totals()
 
     def test_mtime_change_is_a_new_version_but_offset_change_is_not(self):
         self.restic.add(1, "2026-03-28T10:00:00Z", {"/data/a": (1, "2026-03-29T00:30:00Z")})
@@ -137,6 +157,7 @@ class IndexerTest(unittest.TestCase):
         self.assertEqual(self.listing(2), {"a": 2})
         self.assertEqual(self.listing(3), {"a": 3, "b": 3})
         self.assertEqual(self.versions_of("/data/a"), 3)
+        self.assert_totals()
 
     def test_rewritten_snapshot_takes_the_place_of_the_old_one(self):
         # `restic tag` gives a snapshot a new id, keeping its time and tree.
@@ -168,6 +189,7 @@ class IndexerTest(unittest.TestCase):
         self.restic.fail_at = None
         self.assertEqual(self.indexer.run(), 1)
         self.assertEqual(self.listing(2, "/data/new/deep"), {"x": 7})
+        self.assert_totals()
 
     def test_series_are_kept_apart(self):
         self.restic.add(1, "2026-01-01T10:00:00Z", {"/data/a": 1}, host="alpha")
@@ -178,6 +200,46 @@ class IndexerTest(unittest.TestCase):
         self.assertEqual(self.listing(2), {"a": 2})
         self.assertEqual(self.listing(3), {"a": 1})
         self.assertEqual(self.versions_of("/data/a"), 2)
+        self.assert_totals()
+
+    def test_directory_totals_follow_every_change(self):
+        self.restic.add(1, "2026-01-01T10:00:00Z", {"/data/a": 1, "/data/sub/x": 10, "/data/sub/deep/y": 100})
+        self.restic.add(2, "2026-01-02T10:00:00Z", {"/data/a": 2, "/data/sub/x": 10})  # deep/ removed
+        self.restic.add(3, "2026-01-03T10:00:00Z", {"/data/a": 2, "/data/sub/x": (10, "2026-01-03T00:00:00Z")})
+        self.restic.add(4, "2026-01-04T10:00:00Z", {"/data/a": 2, "/data/sub/deep/y": 5, "/other/z": 7})
+        self.indexer.run()
+        self.assert_totals()
+        sizes = [(p["size"], p["files"]) for p in query.history(self.con, self.snapshot_row(4), "/data/sub")]
+        self.assertEqual(sizes, [(110, 2), (10, 1), (10, 1), (5, 1)])
+        # A touched file changes nothing in the totals, but the directory is marked as changed.
+        snap3, snap2 = self.snapshot_row(3), self.snapshot_row(2)
+        statuses = {e["name"]: e["status"] for e in query.list_dir(self.con, snap3, "/data", snap2)}
+        self.assertEqual(statuses, {"a": None, "sub": "changed"})
+
+    def test_listing_against_the_previous_snapshot(self):
+        self.restic.add(1, "2026-01-01T10:00:00Z", {"/data/a": 1, "/data/b": 2, "/data/sub/x": 1})
+        self.restic.add(2, "2026-01-02T10:00:00Z", {"/data/a": 5, "/data/b": 2, "/data/c": 3, "/data/sub/x": 4})
+        self.indexer.run()
+        snap1, snap2 = self.snapshot_row(1), self.snapshot_row(2)
+        self.assertIsNone(query.previous_snapshot(self.con, snap1))
+        self.assertEqual(query.previous_snapshot(self.con, snap2)["id"], snap1["id"])
+        entries = query.list_dir(self.con, snap2, "/data", snap1)
+        self.assertEqual([(e["name"], e["status"]) for e in entries],
+                         [("sub", "changed"), ("a", "modified"), ("b", None), ("c", "added")])
+        self.assertEqual((entries[0]["size"], entries[0]["files"]), (4, 1))
+        self.assertEqual(query.removed_entries(self.con, snap2, snap1, "/data"), [])
+        gone = query.removed_entries(self.con, snap1, snap2, "/data")  # the other way round
+        self.assertEqual([(e["name"], e["status"]) for e in gone], [("c", "removed")])
+
+    def test_history_of_a_path(self):
+        self.restic.add(1, "2026-01-01T10:00:00Z", {"/data/a": 1})
+        self.restic.add(2, "2026-01-02T10:00:00Z", {"/data/b": 1})
+        self.restic.add(3, "2026-01-03T10:00:00Z", {"/data/a": 3})
+        self.indexer.run()
+        points = query.history(self.con, self.snapshot_row(3), "/data/a")
+        self.assertEqual([(p["present"], p["size"]) for p in points], [(True, 1), (False, None), (True, 3)])
+        root = query.history(self.con, self.snapshot_row(3), "/")
+        self.assertEqual([(p["type"], p["size"], p["files"]) for p in root], [("dir", 1, 1), ("dir", 1, 1), ("dir", 3, 1)])
 
     def test_listing_errors(self):
         self.restic.add(1, "2026-01-01T10:00:00Z", {"/data/a": 1})

@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from .db import IRREGULAR, OPEN, TYPE_CODE
+from .totals import update_dir_totals
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _US = timedelta(microseconds=1)
@@ -70,6 +71,7 @@ class Indexer:
         done = 0
         for n, snap in enumerate(pending, 1):
             started = time.monotonic()
+            self.progress("reading", n=n, total=len(pending), snapshot=snap)
             stats = self.ingest(snap["id"], self.restic.ls(snap["restic_id"]))
             if stats is not None:
                 done += 1
@@ -143,10 +145,11 @@ class Indexer:
         """Forget what the index knows from position `seq` on. Snapshots already removed from
         the repository can't be read again: they keep their record but lose their content."""
         c = self.con
-        c.execute("DELETE FROM version WHERE series = ? AND first_seq >= ?", (series, seq))
-        # Whatever was alive at seq - 1 is alive in the latest indexed snapshot again.
-        c.execute("UPDATE version SET last_seq = ? WHERE series = ? AND last_seq >= ?",
-                  (OPEN, series, seq - 1))
+        for table in ("version", "dir_total"):
+            c.execute(f"DELETE FROM {table} WHERE series = ? AND first_seq >= ?", (series, seq))
+            # Whatever was alive at seq - 1 is alive in the latest indexed snapshot again.
+            c.execute(f"UPDATE {table} SET last_seq = ? WHERE series = ? AND last_seq >= ?",
+                      (OPEN, series, seq - 1))
         lost = c.execute(
             "SELECT count(*) FROM snapshot WHERE series = ? AND seq >= ? AND forgotten_at IS NOT NULL",
             (series, seq)).fetchone()[0]
@@ -171,6 +174,7 @@ class Indexer:
                 prev = latest or 0
                 self._stage(nodes)
                 stats = self._apply(snap["series"], prev + 1, prev)
+                update_dir_totals(self.con, snap["series"], prev + 1)
                 self.con.execute(
                     "UPDATE snapshot SET seq = ?, indexed_at = ?, n_entries = ?, n_added = ?,"
                     " n_modified = ?, n_removed = ? WHERE id = ?",
