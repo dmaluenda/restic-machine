@@ -46,6 +46,10 @@ _STATIC = {
     **{f"/{name}": (name, "text/javascript; charset=utf-8")
        for name in ("app.js", "common.js", "retention.js", "settings.js")},
 }
+# Read once, with the code: a server keeps serving the page that goes with it even if the files
+# are updated while it runs (a new page against an old server breaks). Restart to get a new version.
+_PAGES = {path: ((PACKAGE_DIR / "static" / name).read_bytes(), content_type)
+          for path, (name, content_type) in _STATIC.items()}
 _CSP = ("default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none';"
         " form-action 'none'; frame-ancestors 'none'")
 
@@ -267,10 +271,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
         self._require_auth()
-        if path in _STATIC:
-            name, content_type = _STATIC[path]
-            self._send((PACKAGE_DIR / "static" / name).read_bytes(), content_type,
-                       headers=[("Content-Security-Policy", _CSP)])
+        if path in _PAGES:
+            body, content_type = _PAGES[path]
+            self._send(body, content_type, headers=[("Content-Security-Policy", _CSP)])
         elif path == "/source":
             self._send(_source_zip(), "application/zip", headers=[
                 ("Content-Disposition", f'attachment; filename="restic-machine-{__version__}-source.zip"')])
