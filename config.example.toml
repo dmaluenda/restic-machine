@@ -41,7 +41,28 @@
 # group_by = "host,paths"
 # prune = true                 # free the space after forgetting (default)
 
+[repository]
+# What you call this repository; the page shows it next to the repository's id.
+# name = "Laptop"
+
 [backup]
-# The exclude file your backup job gives restic (--exclude-file). The Browse page adds the
-# paths you exclude to it, so they are left out from the next backup on.
+# What `restic-machine backup` (run by the schedule) backs up.
+# sources = ["C:/Users/me"]
+# The exclude file it gives restic (--exclude-file). Browse adds the paths you exclude to it.
 # excludes_file = "~/.config/restic/excludes.txt"
+# use_fs_snapshot = true      # Windows: VSS snapshot, for files in use (needs the task's admin rights)
+
+# If the repository is on a Windows share with a login of its own.
+# [backup.share]
+# path = "\\\\nas\\backups"
+# user = "backup"
+# password_file = "~/.config/restic/share-password"
+# by_ip = true                # Windows allows one login per server name
+
+# When. The run at prune_at also applies the retention policy (forget + prune).
+# [backup.schedule]
+# every_hours = 1
+# from = "08:00"
+# to = "23:00"
+# also_at = ["04:00"]
+# prune_at = "04:00"

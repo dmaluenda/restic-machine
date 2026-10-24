@@ -76,6 +76,7 @@ class Config:
     forgotten_retention_days: int = 30
     retention: dict = field(default_factory=dict)  # see normalize_policy()
     excludes_file: Path | None = None  # the --exclude-file of the backup job
+    backup: dict = field(default_factory=lambda: normalize_backup({}))  # see normalize_backup()
     name: str = ""  # what the user calls the repository (shown with its id)
     source: Path | None = None
 
@@ -194,6 +195,52 @@ def normalize_policy(raw: dict, where: str = "retention policy") -> dict:
     return policy
 
 
+_TIME = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
+
+
+def _time_of_day(value, what: str) -> str:
+    match = _TIME.fullmatch(str(value).strip()) if isinstance(value, str) else None
+    if not match:
+        raise ConfigError(f"{what} must be a time of day like 08:00")
+    return f"{int(match[1]):02d}:{match[2]}"
+
+
+def normalize_backup(raw: dict, where: str = "backup settings") -> dict:
+    """Check the [backup] settings (sources, VSS, the repository's Windows share, the schedule)
+    and fill in the defaults. The exclude file is kept apart (Config.excludes_file)."""
+    sources = raw.get("sources", [])
+    if isinstance(sources, str):
+        sources = [line.strip() for line in sources.splitlines() if line.strip()]
+    if not isinstance(sources, list) or not all(isinstance(x, str) and x.strip() for x in sources):
+        raise ConfigError(f"{where}: sources must be a list of folders")
+    share = raw.get("share", {}) or {}
+    schedule = raw.get("schedule", {}) or {}
+    if not isinstance(share, dict) or not isinstance(schedule, dict):
+        raise ConfigError(f"{where}: share and schedule must be tables")
+    every = schedule.get("every_hours", 1)
+    if not isinstance(every, int) or isinstance(every, bool) or not 0 <= every <= 24:
+        raise ConfigError(f"{where}: every_hours must be a whole number of hours (0 for none)")
+    also_at = schedule.get("also_at", [])
+    if isinstance(also_at, str):
+        also_at = [part for part in re.split(r"[,\s]+", also_at) if part]
+    for name in ("use_fs_snapshot", "by_ip"):
+        value = raw.get(name, True) if name == "use_fs_snapshot" else share.get(name, True)
+        if not isinstance(value, bool):
+            raise ConfigError(f"{where}: {name} must be true or false")
+    return {
+        "sources": [x.strip() for x in sources],
+        "use_fs_snapshot": raw.get("use_fs_snapshot", True),
+        "lock_name": str(raw.get("lock_name") or "Global\\restic-machine-backup"),
+        "share": {"path": str(share.get("path", "")).strip(), "user": str(share.get("user", "")).strip(),
+                  "password_file": str(share.get("password_file", "")).strip(), "by_ip": share.get("by_ip", True)},
+        "schedule": {"every_hours": every,
+                     "from": _time_of_day(schedule.get("from", "08:00"), f"{where}: from"),
+                     "to": _time_of_day(schedule.get("to", "23:00"), f"{where}: to"),
+                     "also_at": sorted({_time_of_day(t, f"{where}: also_at") for t in also_at}),
+                     "prune_at": _time_of_day(schedule.get("prune_at", "04:00"), f"{where}: prune_at")},
+    }
+
+
 def has_rules(policy: dict) -> bool:
     return any(key.startswith("keep_") for key in policy)
 
@@ -250,6 +297,7 @@ def load(path: Path | None = None) -> Config:
         cfg.retention = normalize_policy(raw["retention"], f"{path} [retention]")
     cfg.name = str(raw.get("repository", {}).get("name", "")).strip()
     backup = raw.get("backup", {})
+    cfg.backup = normalize_backup(backup, f"{path} [backup]")
     if backup.get("excludes_file"):
         cfg.excludes_file = Path(str(backup["excludes_file"])).expanduser()
     return cfg
@@ -288,8 +336,19 @@ def dump(cfg: Config) -> str:
         index.append(f"forgotten_retention_days = {cfg.forgotten_retention_days}")
     if index:
         lines += ["[index]", *index, ""]
+    backup, default = cfg.backup, normalize_backup({})
+    plain = [f"{key} = {_toml(backup[key])}" for key in ("sources", "use_fs_snapshot", "lock_name")
+             if backup[key] != default[key]]
     if cfg.excludes_file:
-        lines += ["[backup]", f"excludes_file = {_toml(str(cfg.excludes_file))}", ""]
+        plain.insert(0, f"excludes_file = {_toml(str(cfg.excludes_file))}")
+    share = [f"{key} = {_toml(value)}" for key, value in backup["share"].items() if value != default["share"][key]]
+    schedule = [f"{key} = {_toml(value)}" for key, value in backup["schedule"].items()]
+    if plain or share or backup["schedule"] != default["schedule"]:
+        lines += ["[backup]", *plain, ""]
+        if share:
+            lines += ["[backup.share]", *share, ""]
+        if backup["schedule"] != default["schedule"]:
+            lines += ["[backup.schedule]", *schedule, ""]
     if cfg.retention:
         lines += ["# Applied by `restic-machine forget` (e.g. from the backup job)", "[retention]",
                   *(f"{key} = {_toml(value)}" for key, value in cfg.retention.items()), ""]

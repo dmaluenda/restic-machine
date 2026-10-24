@@ -303,3 +303,18 @@ tr.note td { font-size: 12px; font-style: italic; }
 .tree-menu button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 6px 10px; border-radius: 6px; }
 .tree-menu button:hover, .tree-menu button:focus-visible { background: var(--accent-soft); }
 .tree-menu hr { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
+
+/* backups */
+.schedule-line { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: end; }
+.schedule-line label { display: flex; align-items: center; gap: 6px; }
+.form input[type="time"] { display: inline-block; width: auto; }
+.form textarea {
+  display: block; width: 100%; margin-top: 3px; padding: 5px 8px; font-family: var(--mono); font-size: 12px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; resize: vertical;
+}
+.others { margin: 4px 0 8px; }
+.danger.block { display: block; margin-top: 4px; }
+pre.log {
+  max-height: 320px; overflow: auto; padding: 8px 10px; font-family: var(--mono); font-size: 11px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap;
+}

@@ -3,6 +3,7 @@
 import {
   $, api, count, el, formatDate, formatDay, formatSize, mtimeDate, post, snapshotDate, svg,
 } from "./common.js";
+import * as backups from "./backups.js";
 import * as retention from "./retention.js";
 import * as settings from "./settings.js";
 
@@ -74,7 +75,10 @@ function showTab(tab, push = true) {
     $(`#tab-${name}`).setAttribute("aria-selected", name === tab ? "true" : "false");
   }
   if (tab === "settings") settings.load();
-  else if (tab === "retention") retention.load();
+  else if (tab === "retention") {
+    backups.load();
+    retention.load();
+  }
   writeHash(push);
 }
 
@@ -806,6 +810,7 @@ function bind() {
   });
   window.addEventListener("scroll", closeMenu, { passive: true });
   settings.init({ ready: becameReady });
+  backups.init();
   retention.init();
 }
 

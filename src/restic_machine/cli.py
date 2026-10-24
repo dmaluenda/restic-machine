@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-from . import __version__, config, db, query, server
+from . import __version__, backup, config, db, query, schedule, server
 from .indexer import IndexBusy, Indexer
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     except IndexBusy as e:
         _err(f"{e}; try again later")
         return EX_TEMPFAIL
-    except (config.ConfigError, ResticError, db.IndexSchemaError) as e:
+    except (config.ConfigError, ResticError, db.IndexSchemaError, schedule.ScheduleError, backup.BackupError) as e:
         _err(str(e))
         return EX_CONFIG
     except LookupError as e:
@@ -94,6 +94,21 @@ def _parser() -> argparse.ArgumentParser:
                     " the backup job, like restic's own forget. Edit the policy in the web page.")
     forget.add_argument("--dry-run", action="store_true", help="only show what it would keep and remove")
     forget.set_defaults(command=cmd_forget)
+
+    backup = commands.add_parser(
+        "backup", help="one backup run, as the schedule starts it (and forget + prune when due)",
+        description="Back up the [backup] sources, logging into the repository's Windows share first if one"
+                    " is set, and apply the retention policy on the run at the prune time (or after 30 h"
+                    " without one). The log is backup.log next to the index.")
+    backup.add_argument("--prune", choices=("auto", "always", "never"), default="auto",
+                        help="apply the retention policy: when due (default), always, or not")
+    backup.set_defaults(command=cmd_backup)
+
+    sched = commands.add_parser("schedule", help="show the backup schedule, or install it (Windows, asks for administrator)")
+    sched.add_argument("--install", action="store_true", help="create or update the scheduled task (UAC prompt)")
+    sched.add_argument("--disable", action="append", default=[], metavar="TASK",
+                       help="also disable this other scheduled task (e.g. an older backup script)")
+    sched.set_defaults(command=cmd_schedule)
     return parser
 
 
@@ -243,6 +258,28 @@ def cmd_forget(cfg: config.Config, args) -> int:
         return 0
     print(f"restic-machine: applying the retention policy of {cfg.path}", flush=True)
     return restic.forget(policy_args, policy.get("prune", True))
+
+
+def cmd_backup(cfg: config.Config, args) -> int:
+    return backup.run(cfg, prune=args.prune)
+
+
+def cmd_schedule(cfg: config.Config, args) -> int:
+    if args.install:
+        result = schedule.install(cfg, args.disable)
+        if not result.get("ok"):
+            raise schedule.ScheduleError(result.get("error", "could not install the schedule"))
+        print(f"installed: {schedule.TASK_NAME}, {schedule.describe(cfg.backup['schedule'])}")
+    current = schedule.state()
+    if not current["supported"]:
+        print("scheduled backups are only handled on Windows so far")
+        return 0
+    for task in ([current["ours"]] if current["ours"] else []) + current["others"]:
+        print(f"{task['name']}: {task['state']}, last run {task['last_run'] or '-'} (result {task['last_result']}),"
+              f" next {task['next_run'] or '-'}  [{task['action']}]")
+    if not current["ours"]:
+        print(f"{schedule.TASK_NAME}: not installed (restic-machine schedule --install)")
+    return 0
 
 
 def _print_progress(event: str, **info) -> None:

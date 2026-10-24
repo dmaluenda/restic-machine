@@ -50,7 +50,64 @@ In your browser you get:
 ## Requirements
 
 - Python 3.11 or newer
-- restic 0.17 or newer
+- restic 0.17 or newer (see below)
+
+## Getting started
+
+### 1. Install restic
+
+restic-machine drives restic; it doesn't replace it. restic is a single program file:
+
+- **Windows:** download `restic_<version>_windows_amd64.zip` from
+  [restic's releases](https://github.com/restic/restic/releases), unzip it and put
+  `restic.exe` in a folder of your choice (for instance `C:\Tools\restic\`). Either add that
+  folder to your `PATH` or give its full path in Settings → *restic program*. (`winget install
+  restic.restic` and `scoop install restic` work too.)
+- **Linux:** your distribution's package (`apt install restic`, `dnf install restic`…) if it
+  is recent enough (`restic version`), otherwise the release binary as above.
+- **macOS:** `brew install restic`.
+
+Check it with `restic version`, and keep it current with `restic self-update`.
+
+### 2. Choose where the backups go
+
+A restic repository is a folder (or a bucket in the cloud). Keep it on **another disk** than the
+data it protects, and better on another machine. restic encrypts everything it writes with the
+repository password: keep that password in a file only you can read (restic-machine never
+stores it, only where to find it), and keep a copy somewhere safe — without it the backups can't
+be read.
+
+- **A second internal disk.** Create a folder on it, say `D:\restic-repo` (Windows) or
+  `/srv/restic-repo` (Linux), and use that path as the repository.
+- **An external USB disk.** The same, with a folder on the USB disk. The backups only run while
+  it is plugged in: a backup started without it fails and the next one catches up. On Windows,
+  give the disk a fixed drive letter (Disk Management → *Change Drive Letter and Paths*) so the
+  path stays the same; on Linux, mount it by label or UUID (an `/etc/fstab` line with `nofail`).
+- **A network share (SMB), e.g. a NAS or a server running Samba.** Create a share and a user that
+  can write to it on the server (setting up Samba itself is outside restic-machine), then use
+  `\\server\share\restic-repo` as the repository. If the share needs its own login, give it in
+  Retention → *Backups* → *Repository on a Windows share*: the share, the user, and a **file**
+  with that user's password. restic-machine logs in before each backup, by IP address if you
+  ask it to (Windows allows only one login per server name, and you may already be browsing that
+  server as someone else). On Linux, mount the share instead (`mount -t cifs` or an `/etc/fstab`
+  line with a credentials file) and use the mounted path.
+- restic also writes to SFTP servers, its REST server, S3-compatible storage, Backblaze B2 and
+  more (see restic's documentation): those work in restic-machine as they do in restic.
+
+Then create the repository once, from a terminal: `restic -r <path> init` (it asks for the new
+password), and put that password in its file.
+
+### 3. Point restic-machine at it
+
+Start restic-machine (below). With no repository configured it opens on **Settings**: give the
+repository, the password file, and press *Test connection*, then *Save*. Then, in **Retention**:
+
+- **Backups:** the folders to back up, when (every N hours between two times, plus fixed times),
+  and *Save and schedule*. On Windows this creates a Task Scheduler task that runs
+  `restic-machine backup` on its own, with restic-machine closed and nobody logged in; Windows
+  asks for administrator rights to create it (the task runs with them, for VSS snapshots of files
+  in use) and keeps **no password** for it.
+- **Retention policy:** which snapshots to keep. The backup run at the prune time applies it.
 
 ## Usage
 
@@ -77,15 +134,17 @@ restic-machine ls latest /home/me     # a folder as it was in a snapshot
 restic-machine info                   # where the index is and what it holds
 restic-machine forget --dry-run       # what the retention policy would keep and remove
 restic-machine forget                 # apply it (this deletes snapshots: run it from your backup job)
+restic-machine backup                 # one backup run, as the schedule starts it
+restic-machine schedule [--install]   # the Windows task that runs the backups
 ```
 
 (From a clone without installing: `PYTHONPATH=src python -m restic_machine ...`.)
 
-### Retention from your backup job
+### Keeping your own backup script
 
-Set the policy in the Retention page, then replace the `restic forget --keep-… --prune`
-line of your backup script with `restic-machine forget`. It uses the same repository
-settings (or `-r REPOSITORY`), prints restic's output and returns restic's exit code.
+If you'd rather keep your own scheduled script, let it call `restic-machine backup` (or just
+replace its `restic forget --keep-… --prune` line with `restic-machine forget`): the policy
+then lives in restic-machine and its pages show and simulate it. Both use restic's exit code.
 
 ## Configuration
 

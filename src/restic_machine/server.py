@@ -21,6 +21,7 @@ import io
 import json
 import os
 import secrets
+import subprocess
 import threading
 import time
 import traceback
@@ -33,7 +34,7 @@ from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, config, db, excludes, query, retention
+from . import __version__, backup, config, db, excludes, query, retention, schedule
 from .indexer import IndexBusy, Indexer, timestamp_us
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -44,7 +45,7 @@ _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     **{f"/{name}": (name, "text/javascript; charset=utf-8")
-       for name in ("app.js", "common.js", "retention.js", "settings.js")},
+       for name in ("app.js", "backups.js", "common.js", "retention.js", "settings.js")},
 }
 # Read once, with the code: a server keeps serving the page that goes with it even if the files
 # are updated while it runs (a new page against an old server breaks). Restart to get a new version.
@@ -293,6 +294,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._retention())
         elif path == "/api/excludes":
             self._send_json(self._excludes())
+        elif path == "/api/backup":
+            self._send_json(self._backup())
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such page: {path}")
 
@@ -321,6 +324,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._exclude(self._json_body()))
         elif path == "/api/excludes/remove":
             self._send_json(self._include(self._json_body()))
+        elif path == "/api/backup/settings":
+            self._send_json(self._save_backup(self._json_body()))
+        elif path == "/api/backup/install":
+            self._send_json(self._install_schedule(self._json_body()))
+        elif path == "/api/backup/run":
+            self._send_json(schedule.run_now())
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such action: {path}")
 
@@ -505,6 +514,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "path": path, "dirs": dirs, "truncated": bool(queue), "excludes": patterns is not None}
 
     # -- the backup's exclude file ----------------------------------------------------------
+
+    # -- backups and their schedule ----------------------------------------------------------
+
+    def _backup(self) -> dict:
+        settings = self.app.cfg.backup
+        try:
+            tasks, tasks_error = schedule.state(), None
+        except (schedule.ScheduleError, OSError, subprocess.SubprocessError) as e:
+            tasks, tasks_error = {"supported": schedule.supported(), "ours": None, "others": []}, str(e)
+        log = backup.log_file(self.app.cfg)
+        try:
+            tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-60:]
+        except OSError:
+            tail = []
+        return {"settings": settings, "excludes_file": str(self.app.cfg.excludes_file or ""),
+                "summary": schedule.describe(settings["schedule"]), "run_times": schedule.run_times(settings["schedule"]),
+                "tasks": tasks, "tasks_error": tasks_error, "task_name": schedule.TASK_NAME,
+                "log": tail, "log_file": str(log)}
+
+    def _save_backup(self, body: dict) -> dict:
+        raw = body.get("settings") or {}
+        current = self.app.cfg.backup
+        try:
+            settings = config.normalize_backup({**raw, "lock_name": current["lock_name"]})
+            schedule.check(settings["schedule"])
+        except (config.ConfigError, schedule.ScheduleError) as e:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        self.app.cfg.backup = settings
+        config.save(self.app.cfg)
+        return self._backup()
+
+    def _install_schedule(self, body: dict) -> dict:
+        """Register the task after the UAC prompt; this waits for the user to answer it."""
+        disable = [str(name) for name in body.get("disable") or []]
+        try:
+            result = schedule.install(self.app.cfg, disable)
+        except schedule.ScheduleError as e:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        return {**result, **self._backup()}
 
     def _excludes_file(self) -> Path:
         if not self.app.cfg.excludes_file:

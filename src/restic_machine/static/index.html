@@ -72,6 +72,52 @@
   </div>
 
   <div id="view-retention" class="view page" role="tabpanel" aria-labelledby="tab-retention" hidden>
+    <section aria-labelledby="backups-title">
+      <h2 id="backups-title">Backups</h2>
+      <p class="hint">What is backed up and when. A task of the Windows Task Scheduler runs
+        <code>restic-machine backup</code> on its own, with this page closed and nobody logged in.</p>
+      <p id="backup-state" class="callout"></p>
+      <form id="backup-form" class="form" autocomplete="off">
+        <fieldset>
+          <legend>When</legend>
+          <div class="schedule-line">
+            <label>Every <input name="every_hours" type="number" min="0" max="24" step="1" class="short"> hour(s)</label>
+            <label>from <input name="from" type="time"></label>
+            <label>to <input name="to" type="time"></label>
+          </div>
+          <label class="wide">and also at <input name="also_at" spellcheck="false" placeholder="e.g. 04:00, 13:30"></label>
+          <label>Forget and prune (the retention policy) on the run at <input name="prune_at" type="time"></label>
+          <p class="hint" id="schedule-summary"></p>
+        </fieldset>
+        <fieldset>
+          <legend>What</legend>
+          <label class="wide">Folders to back up, one per line
+            <textarea name="sources" rows="2" spellcheck="false"></textarea>
+          </label>
+          <p class="hint">Left out: what the exclude file lists (<code id="backup-excludes"></code>; set it in
+            Settings, Browse adds to it).</p>
+          <label class="check"><input type="checkbox" name="use_fs_snapshot"> Use a VSS snapshot (Windows): files in use are backed up as they were at one moment</label>
+        </fieldset>
+        <fieldset>
+          <legend>Repository on a Windows share</legend>
+          <label class="wide">Share <input name="share_path" spellcheck="false" placeholder="\\server\share — empty if no separate login is needed"></label>
+          <label class="wide">User <input name="share_user" spellcheck="false"></label>
+          <label class="wide">Password file <input name="share_password_file" spellcheck="false" placeholder="the file that holds the share's password (never stored by restic-machine)"></label>
+          <label class="check"><input type="checkbox" name="share_by_ip"> Connect by IP address (Windows allows one login per server name, and you may be using that server under another user)</label>
+        </fieldset>
+        <div id="backup-others" class="others" hidden></div>
+        <div class="actions">
+          <button type="submit">Save</button>
+          <button type="button" id="backup-install" class="primary">Save and schedule (administrator)</button>
+          <button type="button" id="backup-run">Back up now</button>
+          <span id="backup-result" role="status"></span>
+        </div>
+      </form>
+      <details>
+        <summary>Last lines of the backup log</summary>
+        <pre id="backup-log" class="log"></pre>
+      </details>
+    </section>
     <section aria-labelledby="retention-title">
       <h2 id="retention-title">Retention policy</h2>
       <p class="hint">restic keeps no policy of its own: it is whatever <code>restic forget</code> is
