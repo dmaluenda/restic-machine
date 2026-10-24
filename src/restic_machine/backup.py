@@ -171,7 +171,7 @@ def run(cfg: config.Config, prune: str = "auto") -> int:
     """One backup run; returns 0 or restic's exit code. `prune`: auto, always or never."""
     settings = cfg.backup
     if not settings["sources"]:
-        raise config.ConfigError(f"no backup sources in {cfg.path}: set them in the Retention page")
+        raise config.ConfigError(f"no backup sources in {cfg.path}: set them in the Scheduler page")
     repository = cfg.repository_label()
     cfg.check_password_source()
     log = Log(log_file(cfg))

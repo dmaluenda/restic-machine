@@ -11,19 +11,25 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>restic-machine</h1>
-    <nav class="tabs" role="tablist" aria-label="Pages">
-      <button id="tab-browse" type="button" role="tab" aria-controls="view-browse">Browse</button>
-      <button id="tab-retention" type="button" role="tab" aria-controls="view-retention">Retention</button>
-      <button id="tab-repository" type="button" role="tab" aria-controls="view-repository">Repository</button>
-      <button id="tab-settings" type="button" role="tab" aria-controls="view-settings">Settings</button>
-    </nav>
-    <span id="repo" class="muted"></span>
-    <select id="series" aria-label="Backup series" hidden></select>
-    <span class="spacer"></span>
-    <span id="index-state" class="muted" aria-live="polite"></span>
-    <button id="reindex" type="button">Update index</button>
-    <button id="stop" type="button" title="Stop restic-machine (it also stops by itself a while after its last tab is closed)">Stop</button>
+    <div class="topbar-start">
+      <h1>restic-machine</h1>
+      <nav class="tabs" role="tablist" aria-label="Pages">
+        <button id="tab-browse" type="button" role="tab" aria-controls="view-browse">Browser</button>
+        <button id="tab-scheduler" type="button" role="tab" aria-controls="view-scheduler">Scheduler</button>
+        <button id="tab-retention" type="button" role="tab" aria-controls="view-retention">Retention</button>
+        <button id="tab-cli" type="button" role="tab" aria-controls="view-cli">restic-CLI</button>
+        <button id="tab-settings" type="button" role="tab" aria-controls="view-settings">Settings</button>
+      </nav>
+    </div>
+    <div class="topbar-center">
+      <span id="repo"></span>
+      <select id="series" aria-label="Backup series" hidden></select>
+    </div>
+    <div class="topbar-end">
+      <span id="index-state" class="muted" aria-live="polite"></span>
+      <button id="reindex" type="button">Update index</button>
+      <button id="stop" type="button" title="Stop restic-machine (it also stops by itself a while after its last tab is closed)">Stop</button>
+    </div>
   </header>
 
   <div id="banner" class="banner" role="status" hidden></div>
@@ -71,9 +77,9 @@
     </main>
   </div>
 
-  <div id="view-retention" class="view page" role="tabpanel" aria-labelledby="tab-retention" hidden>
+  <div id="view-scheduler" class="view page" role="tabpanel" aria-labelledby="tab-scheduler" hidden>
     <section aria-labelledby="backups-title">
-      <h2 id="backups-title">Backups</h2>
+      <h2 id="backups-title">Scheduled backups</h2>
       <p class="hint">What is backed up and when. A task of the Windows Task Scheduler runs
         <code>restic-machine backup</code> on its own, with this page closed and nobody logged in.</p>
       <p id="backup-state" class="callout"></p>
@@ -118,6 +124,9 @@
         <pre id="backup-log" class="log"></pre>
       </details>
     </section>
+  </div>
+
+  <div id="view-retention" class="view page" role="tabpanel" aria-labelledby="tab-retention" hidden>
     <section aria-labelledby="retention-title">
       <h2 id="retention-title">Retention policy</h2>
       <p class="hint">restic keeps no policy of its own: it is whatever <code>restic forget</code> is
@@ -197,9 +206,9 @@
     </section>
   </div>
 
-  <div id="view-repository" class="view page" role="tabpanel" aria-labelledby="tab-repository" hidden>
+  <div id="view-cli" class="view page" role="tabpanel" aria-labelledby="tab-cli" hidden>
     <section aria-labelledby="commands-title">
-      <h2 id="commands-title">restic commands</h2>
+      <h2 id="commands-title">restic-CLI</h2>
       <p class="hint">Coming next: restic's commands from here, the ones that only read apart from the
         ones that change the repository, and a danger zone (with explicit confirmation) for those that
         delete data.</p>

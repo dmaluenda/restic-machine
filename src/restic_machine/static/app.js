@@ -53,7 +53,8 @@ function showBanner(message, warning = false) {
 
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  return { tab: params.get("tab") || "browse", snapshot: params.get("snapshot"), compare: params.get("compare") };
+  const tab = { repository: "cli" }[params.get("tab")] || params.get("tab") || "browse";
+  return { tab, snapshot: params.get("snapshot"), compare: params.get("compare") };
 }
 
 function writeHash(push) {
@@ -63,9 +64,9 @@ function writeHash(push) {
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
 }
 
-// ---- tabs: Browse, Retention, Repository, Settings ------------------------------------------------
+// ---- tabs: Browser, Scheduler, Retention, restic-CLI, Settings ------------------------------------------------
 
-const TABS = ["browse", "retention", "repository", "settings"];
+const TABS = ["browse", "scheduler", "retention", "cli", "settings"];
 
 function showTab(tab, push = true) {
   if (!state.status?.ready) tab = "settings";  // nothing else works without a repository
@@ -75,10 +76,8 @@ function showTab(tab, push = true) {
     $(`#tab-${name}`).setAttribute("aria-selected", name === tab ? "true" : "false");
   }
   if (tab === "settings") settings.load();
-  else if (tab === "retention") {
-    backups.load();
-    retention.load();
-  }
+  else if (tab === "scheduler") backups.load();
+  else if (tab === "retention") retention.load();
   writeHash(push);
 }
 
@@ -117,11 +116,12 @@ function renderStatus() {
   const { status } = state;
   const indexing = status.indexing;
   const short = status.repository ? status.repository.slice(0, 8) : "";
-  $("#repo").textContent = !status.ready ? "not set up yet"
-    : status.name ? `${status.name} (${short})` : `repository ${short}`;
+  $("#repo").replaceChildren(...(!status.ready ? [el("span", { class: "muted" }, "not set up yet")]
+    : status.name ? [el("em", {}, status.name), " ", el("span", { class: "muted" }, `(${short})`)]
+      : [el("span", { class: "muted" }, `repository ${short}`)]));
   document.title = status.name ? `${status.name} · restic-machine` : "restic-machine";
   $("#repo").title = status.repository || "";
-  for (const name of ["browse", "retention", "repository"]) $(`#tab-${name}`).disabled = !status.ready;
+  for (const name of TABS.filter((tab) => tab !== "settings")) $(`#tab-${name}`).disabled = !status.ready;
   $("#reindex").hidden = !status.ready;
   $("#attribution").textContent = status.attribution;
   $("#version").textContent = `v${status.version}`;

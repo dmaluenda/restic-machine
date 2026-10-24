@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 David Maluenda
-// The Backups block of the Retention page: what is backed up, when, and the Windows task that
+// The Scheduler page: what is backed up, when, and the Windows task that
 // does it on its own (with the page closed and nobody logged in).
 
 import { $, api, el, formatDate, post } from "./common.js";

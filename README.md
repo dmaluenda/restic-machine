@@ -3,15 +3,14 @@
 A visual interface for [restic](https://restic.net), running on the computer you back up.
 Browse the history of your repository: a timeline of your snapshots and, for any of them,
 the tree of files as it was then, with sizes and modification times. Manage its retention
-policy and see what it would keep before it deletes anything.
+policy and see what it would keep before it deletes anything. Schedule the backups.
 
-> **Status: early development.** Browsing, settings and the retention policy work.
-> Next: restic's commands from the interface, downloading and restoring files, and the
-> backup itself.
+> **Status: early development.** Browsing, scheduled backups, settings and the retention
+> policy work. Next: restic's commands from the interface, and downloading and restoring files.
 
 In your browser you get:
 
-- **Browse:** a timeline of the snapshots, each bar as tall as the number of changes it
+- **Browser:** a timeline of the snapshots, each bar as tall as the number of changes it
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
   tree as it was in the chosen snapshot (open folders in place, right-click one to expand a
   level, everything below it, or collapse it), with the size and file count of every folder,
@@ -19,10 +18,12 @@ In your browser you get:
   and Compare to see only what changed between them, with the change in size; the size of
   any file or folder over time; and a button to leave a file or folder out of the next
   backups (it adds the path to your backup's exclude file).
+- **Scheduler:** what is backed up and when; restic-machine makes it a scheduled task of the
+  system that runs the backups on its own.
 - **Retention:** the retention policy (which snapshots to keep), a calendar of what it
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.
-- **Repository:** restic's commands (coming next).
+- **restic-CLI:** restic's commands (coming next).
 - **Settings:** where the repository is and how restic gets its password. When something
   is missing or wrong, restic-machine opens on this page.
 
@@ -86,7 +87,7 @@ be read.
 - **A network share (SMB), e.g. a NAS or a server running Samba.** Create a share and a user that
   can write to it on the server (setting up Samba itself is outside restic-machine), then use
   `\\server\share\restic-repo` as the repository. If the share needs its own login, give it in
-  Retention → *Backups* → *Repository on a Windows share*: the share, the user, and a **file**
+  Scheduler → *Repository on a Windows share*: the share, the user, and a **file**
   with that user's password. restic-machine logs in before each backup, by IP address if you
   ask it to (Windows allows only one login per server name, and you may already be browsing that
   server as someone else). On Linux, mount the share instead (`mount -t cifs` or an `/etc/fstab`
@@ -100,14 +101,14 @@ password), and put that password in its file.
 ### 3. Point restic-machine at it
 
 Start restic-machine (below). With no repository configured it opens on **Settings**: give the
-repository, the password file, and press *Test connection*, then *Save*. Then, in **Retention**:
+repository, the password file, and press *Test connection*, then *Save*. Then:
 
-- **Backups:** the folders to back up, when (every N hours between two times, plus fixed times),
+- **Scheduler:** the folders to back up, when (every N hours between two times, plus fixed times),
   and *Save and schedule*. On Windows this creates a Task Scheduler task that runs
   `restic-machine backup` on its own, with restic-machine closed and nobody logged in; Windows
   asks for administrator rights to create it (the task runs with them, for VSS snapshots of files
   in use) and keeps **no password** for it.
-- **Retention policy:** which snapshots to keep. The backup run at the prune time applies it.
+- **Retention:** which snapshots to keep. The backup run at the prune time applies it.
 
 ## Usage
 
