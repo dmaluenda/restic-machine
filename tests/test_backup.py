@@ -48,6 +48,7 @@ class SettingsTest(unittest.TestCase):
         self.assertIn("-LogonType S4U -RunLevel Highest", script)
         self.assertIn("-RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Minutes 900)", script)
         self.assertIn("New-ScheduledTaskTrigger -Daily -At '04:00'", script)
+        self.assertEqual(script.count("$t.StartBoundary = $t.StartBoundary.Substring(0, 19)"), 2)  # local time
         self.assertIn("-m restic_machine --config \"C:", script)
         self.assertIn("Disable-ScheduledTask -TaskName 'old backup'", script)
         self.assertNotIn("Password", script.replace("-LogonType S4U", ""))
@@ -115,9 +116,16 @@ class RunTest(unittest.TestCase):
     def test_prune_waits_for_its_time_on_a_first_run(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"RESTIC_MACHINE_DATA": tmp}):
             cfg = config.Config(backup=config.normalize_backup({"schedule": {"prune_at": "04:00"}}))
-            self.assertFalse(backup.prune_due(cfg, datetime(2026, 10, 24, 16, 0)))  # no record yet: now
-            self.assertTrue(backup.prune_due(cfg, datetime(2026, 10, 25, 4, 5)))   # the prune hour
-            self.assertTrue(backup.prune_due(cfg, datetime(2026, 10, 25, 23, 0)))  # 31 h later: catch up
+            # No prune recorded yet: only at the prune time (give or take an hour, for daylight saving).
+            self.assertFalse(backup.prune_due(cfg, datetime(2026, 10, 24, 16, 0)))
+            self.assertTrue(backup.prune_due(cfg, datetime(2026, 10, 25, 4, 5)))
+            self.assertTrue(backup.prune_due(cfg, datetime(2026, 10, 25, 3, 0)))
+            self.assertFalse(backup.prune_due(cfg, datetime(2026, 10, 25, 8, 0)))
+            (Path(tmp) / "last_prune.txt").write_text("2026-10-25T03:02:00")
+            self.assertFalse(backup.prune_due(cfg, datetime(2026, 10, 25, 4, 0)))  # pruned an hour ago
+            self.assertFalse(backup.prune_due(cfg, datetime(2026, 10, 25, 23, 0)))  # 20 h: wait for the night
+            self.assertTrue(backup.prune_due(cfg, datetime(2026, 10, 26, 3, 30)))  # the next night
+            self.assertTrue(backup.prune_due(cfg, datetime(2026, 10, 26, 10, 0)))  # 31 h: catch up
 
 
 if __name__ == "__main__":

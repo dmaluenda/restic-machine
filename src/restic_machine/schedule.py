@@ -20,6 +20,10 @@ from pathlib import Path
 from . import config
 
 TASK_NAME = "restic-machine backup"
+# New-ScheduledTaskTrigger writes the start with today's UTC offset (…T04:00:00+02:00), which ties
+# the trigger to that offset: after a change of daylight saving time it would run an hour off.
+# Without the offset the time is local, and 04:00 stays 04:00 all year.
+_LOCAL_TIME = "$t.StartBoundary = $t.StartBoundary.Substring(0, 19)"
 PACKAGE_DIR = Path(__file__).parent
 _NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
@@ -92,9 +96,9 @@ def install_script(cfg: config.Config, disable: list[str], result_file: Path) ->
             f"$t = New-ScheduledTaskTrigger -Daily -At {_quote(schedule['from'])}; "
             f"$t.Repetition = (New-ScheduledTaskTrigger -Once -At {_quote(schedule['from'])} "
             f"-RepetitionInterval (New-TimeSpan -Hours {schedule['every_hours']}) "
-            f"-RepetitionDuration (New-TimeSpan -Minutes {minutes})).Repetition; $triggers += $t")
+            f"-RepetitionDuration (New-TimeSpan -Minutes {minutes})).Repetition; {_LOCAL_TIME}; $triggers += $t")
     for at in schedule["also_at"]:
-        triggers.append(f"$triggers += New-ScheduledTaskTrigger -Daily -At {_quote(at)}")
+        triggers.append(f"$t = New-ScheduledTaskTrigger -Daily -At {_quote(at)}; {_LOCAL_TIME}; $triggers += $t")
     disables = "\n".join(f"    Disable-ScheduledTask -TaskName {_quote(name)} | Out-Null" for name in disable)
     return f"""$ErrorActionPreference = 'Stop'
 $result = {_quote(result_file)}

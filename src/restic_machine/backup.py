@@ -27,6 +27,7 @@ from pathlib import Path
 from . import config
 
 PRUNE_CATCH_UP = timedelta(hours=30)
+PRUNE_SPACING = timedelta(hours=12)
 _NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
@@ -156,15 +157,17 @@ def disconnect_share(unc: str) -> None:
 # -- the run -----------------------------------------------------------------------------------
 
 def prune_due(cfg: config.Config, now: datetime) -> bool:
-    """At the prune time's hour, or to catch up after 30 hours without one. With no record yet,
-    the first prune waits for the prune time."""
+    """On the run at the prune time, or to catch up after 30 hours without one. The prune time
+    is matched within an hour either way, because a change to or from daylight saving time can
+    move a run by an hour, but then at most once in 12 hours. With no record of a prune yet,
+    only at the prune time."""
     prune_hour = int(cfg.backup["schedule"]["prune_at"][:2])
+    near = min((now.hour - prune_hour) % 24, (prune_hour - now.hour) % 24) <= 1
     try:
         last = datetime.fromisoformat(_last_prune_file().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        _last_prune_file().write_text(now.isoformat(timespec="seconds"), encoding="utf-8")
-        last = now
-    return now.hour == prune_hour or now - last > PRUNE_CATCH_UP
+        return near
+    return (near and now - last > PRUNE_SPACING) or now - last > PRUNE_CATCH_UP
 
 
 def run(cfg: config.Config, prune: str = "auto") -> int:
