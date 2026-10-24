@@ -12,8 +12,14 @@ const state = {
   snapshots: [],          // visible snapshots of the current series, oldest first
   series: null,
   snapshot: null,         // restic id of the snapshot on screen
-  path: "/",
-  dir: null,              // last /api/dir answer
+  compare: null,          // restic id of the older snapshot it is compared with, if any
+  picked: new Set(),      // snapshots picked on the timeline (Ctrl+click) to compare
+  previous: null,         // what the changes shown are measured against
+  expanded: null,         // open folders (a Set of paths), remembered between visits
+  cache: null,            // path -> {entries, removed} for the snapshot (and comparison) on screen
+  cacheKey: null,
+  autoOpen: false,
+  excludes: false,        // whether an exclude file is set, so entries can be excluded
   sort: { key: "name", asc: true },
   showRemoved: false,
   detailPath: null,
@@ -42,16 +48,16 @@ function showBanner(message, warning = false) {
   banner.classList.toggle("warning", warning);
 }
 
-// ---- address bar: #snapshot=…&path=… (Browse) or #tab=… --------------------------------
+// ---- address bar: #snapshot=…[&compare=…] (Browse) or #tab=… -------------------------------
 
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  return { tab: params.get("tab") || "browse", snapshot: params.get("snapshot"), path: params.get("path") || "/" };
+  return { tab: params.get("tab") || "browse", snapshot: params.get("snapshot"), compare: params.get("compare") };
 }
 
 function writeHash(push) {
   const params = state.tab !== "browse" ? { tab: state.tab }
-    : state.snapshot ? { snapshot: state.snapshot, path: state.path } : {};
+    : state.snapshot ? { snapshot: state.snapshot, ...(state.compare ? { compare: state.compare } : {}) } : {};
   const hash = "#" + new URLSearchParams(params);
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
 }
@@ -106,7 +112,10 @@ async function refreshStatus() {
 function renderStatus() {
   const { status } = state;
   const indexing = status.indexing;
-  $("#repo").textContent = status.ready ? `repository ${status.repository.slice(0, 8)}` : "not set up yet";
+  const short = status.repository ? status.repository.slice(0, 8) : "";
+  $("#repo").textContent = !status.ready ? "not set up yet"
+    : status.name ? `${status.name} (${short})` : `repository ${short}`;
+  document.title = status.name ? `${status.name} · restic-machine` : "restic-machine";
   $("#repo").title = status.repository || "";
   for (const name of ["browse", "retention", "repository"]) $(`#tab-${name}`).disabled = !status.ready;
   $("#reindex").hidden = !status.ready;
@@ -155,7 +164,7 @@ async function loadSnapshots() {
   const shown = current();
   if (shown?.indexed) {
     renderSnapshotInfo();
-    if (!state.dir) await loadDir(false);
+    if (state.cacheKey !== treeKey()) await loadTree();
     return;
   }
   const latest = [...state.snapshots].reverse().find((s) => s.indexed);
@@ -185,7 +194,8 @@ function renderTimeline() {
     const spike = changed != null && changed >= 1000 && rates[i] > 10 * Math.max(medianRate, 1);
     x += gap ? 24 : 14;
     const classes = ["snap", s.indexed ? "" : "pending", spike ? "spike" : "", gap ? "gap" : "",
-      s.id === state.snapshot ? "selected" : ""].filter(Boolean).join(" ");
+      s.id === state.snapshot ? "selected" : "",
+      state.picked.has(s.id) || s.id === state.compare ? "picked" : ""].filter(Boolean).join(" ");
     const lines = [`${formatDate(date)} · ${s.id.slice(0, 8)}`];
     if (!s.indexed) lines.push("not indexed yet");
     else lines.push(`${formatSize(s.size)} in ${count(s.files)} files`,
@@ -195,7 +205,8 @@ function renderTimeline() {
     const button = el("button", {
       type: "button", class: classes, role: "option", title: lines.join("\n"),
       "aria-selected": s.id === state.snapshot ? "true" : "false", "data-id": s.id,
-      onclick: () => s.indexed && select(s.id, true),
+      onclick: (event) => s.indexed && (event.ctrlKey || event.metaKey || event.shiftKey
+        ? togglePick(s.id) : select(s.id, true)),
     }, el("span", { class: "bar" }));
     const height = !s.indexed ? 6 : changed == null ? 100 : 6 + 94 * Math.log1p(changed) / Math.log1p(max);
     button.firstChild.style.height = `${height}%`;
@@ -217,8 +228,25 @@ function renderTimeline() {
 function renderSnapshotInfo() {
   const s = current();
   const info = $("#snapshot-info");
-  if (!s) { info.replaceChildren(); return; }
-  const previous = state.dir?.previous && state.snapshots.find((p) => p.id === state.dir.previous);
+  if (!s) {
+    info.replaceChildren();
+    return;
+  }
+  const older = state.compare && state.snapshots.find((p) => p.id === state.compare);
+  if (older) {
+    const sizeDelta = (s.size ?? 0) - (older.size ?? 0), filesDelta = (s.files ?? 0) - (older.files ?? 0);
+    info.replaceChildren(
+      el("strong", {}, "Comparing"),
+      el("span", {}, formatDate(snapshotDate(older)), " ", el("span", { class: "id" }, older.id.slice(0, 8))),
+      el("span", {}, "→"),
+      el("span", {}, formatDate(snapshotDate(s)), " ", el("span", { class: "id" }, s.id.slice(0, 8))),
+      el("span", {}, `${sizeDelta >= 0 ? "+" : "−"}${formatSize(Math.abs(sizeDelta))}, `,
+        `${filesDelta >= 0 ? "+" : "−"}${count(Math.abs(filesDelta))} files`),
+      el("span", { class: "muted" }, "only what differs is shown"),
+      el("button", { type: "button", onclick: stopCompare }, "Stop comparing"));
+    return;
+  }
+  const previous = state.previous && state.snapshots.find((p) => p.id === state.previous);
   const parts = [
     el("strong", {}, formatDate(snapshotDate(s))),
     el("span", { class: "id", title: s.id }, s.id.slice(0, 8)),
@@ -232,15 +260,67 @@ function renderSnapshotInfo() {
   info.replaceChildren(...parts);
 }
 
+// ---- picking snapshots to compare (Ctrl+click on the timeline) ----------------------------
+
+function togglePick(id) {
+  if (state.picked.has(id)) state.picked.delete(id);
+  else state.picked.add(id);
+  markBars();
+  renderPickBar();
+}
+
+function renderPickBar() {
+  const bar = $("#pick-bar");
+  const n = state.picked.size;
+  bar.replaceChildren(n === 0
+    ? el("span", { class: "hint" }, "Ctrl+click two snapshots to compare them.")
+    : el("span", {}, `${n} snapshot${n > 1 ? "s" : ""} picked`,
+      el("button", { type: "button", class: "primary", disabled: n !== 2, onclick: startCompare,
+        title: n === 2 ? "Show what changed from the older one to the newer one" : "Pick exactly two" }, "Compare"),
+      el("button", { type: "button", onclick: () => {
+        state.picked.clear();
+        markBars();
+        renderPickBar();
+      } }, "Clear")));
+}
+
+function markBars() {
+  for (const bar of $("#bars").children) {
+    const id = bar.dataset.id;
+    bar.classList.toggle("selected", id === state.snapshot);
+    bar.setAttribute("aria-selected", id === state.snapshot ? "true" : "false");
+    bar.classList.toggle("picked", state.picked.has(id) || id === state.compare);
+  }
+}
+
+async function startCompare() {
+  const [older, newer] = [...state.picked]
+    .map((id) => state.snapshots.find((s) => s.id === id))
+    .sort((a, b) => snapshotDate(a) - snapshotDate(b));
+  state.picked.clear();
+  state.compare = older.id;
+  state.snapshot = newer.id;
+  markBars();
+  renderPickBar();
+  writeHash(true);
+  await loadTree();
+  if (state.detailPath) await openDetail(state.detailPath);
+}
+
+function stopCompare() {
+  state.compare = null;
+  markBars();
+  writeHash(true);
+  loadTree();
+}
+
 async function select(id, push) {
   state.snapshot = id;
-  for (const bar of $("#bars").children) {
-    const selected = bar.dataset.id === id;
-    bar.classList.toggle("selected", selected);
-    bar.setAttribute("aria-selected", selected ? "true" : "false");
-  }
+  state.compare = null;
+  markBars();
   $("#bars .selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  await loadDir(push);
+  writeHash(push);
+  await loadTree();
   if (state.detailPath) await openDetail(state.detailPath);
 }
 
@@ -251,58 +331,98 @@ function step(offset) {
   if (next && next.id !== state.snapshot) select(next.id, true);
 }
 
-// ---- folder listing ------------------------------------------------------------------
+// ---- the folder tree -------------------------------------------------------------------
+// Folders open in place and are read when first opened; which ones are open is remembered.
+// Right-click a folder for "expand one level", "expand all" and "collapse all".
 
-async function loadDir(push) {
-  let path = state.path, missing = null, data = null;
-  for (;;) {
-    try {
-      data = await api("/api/dir", { snapshot: state.snapshot, path });
-      break;
-    } catch (error) {
-      if (error.status === 404 && path !== "/") {
-        missing ??= path;
-        path = parentOf(path);
-      } else {
-        $("#listing-note").hidden = false;
-        $("#listing-note").textContent = error.message;
-        return;
-      }
-    }
-  }
-  state.path = data.path;
-  state.dir = data;
-  writeHash(push);
-  renderSnapshotInfo();
-  renderCrumbs();
-  renderListing(missing ? `${missing} did not exist in this snapshot; showing ${data.path} instead.` : "");
-}
-
-function navigate(path) {
-  state.path = path;
-  loadDir(true);
-}
-
-function renderCrumbs() {
-  const parts = state.path.split("/").filter(Boolean);
-  const crumbs = [];
-  const add = (label, path, last) => crumbs.push(last
-    ? el("span", { class: "current" }, label)
-    : el("button", { type: "button", onclick: () => navigate(path) }, label));
-  add("/", "/", parts.length === 0);
-  parts.forEach((name, i) => {
-    if (i > 0) crumbs.push(el("span", { class: "sep" }, "/"));
-    add(name, "/" + parts.slice(0, i + 1).join("/"), i === parts.length - 1);
-  });
-  $("#crumbs").replaceChildren(...crumbs);
-}
-
+const EXPAND_ALL_LIMIT = 5000;  // entries: "expand all" stops there, a snapshot can hold millions
 const STATUS_ORDER = { added: 0, modified: 1, changed: 2, removed: 3 };
 const STATUS_LABEL = { added: "new", modified: "modified", changed: "changed inside", removed: "removed" };
 
+const treeKey = () => `${state.snapshot}|${state.compare || ""}`;
+const expandedKey = () => `restic-machine-open-${state.status?.repository || ""}`;
+
+function cache() {
+  if (state.cacheKey !== treeKey()) {
+    state.cache = new Map();
+    state.cacheKey = treeKey();
+  }
+  return state.cache;
+}
+
+function saveExpanded() {
+  try {
+    localStorage.setItem(expandedKey(), JSON.stringify([...state.expanded]));
+  } catch {
+    // not kept between visits, then
+  }
+}
+
+function restoreExpanded() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(expandedKey()) || "null");
+    return Array.isArray(saved) ? new Set(saved) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTree(path, extra = {}) {
+  const params = { snapshot: state.snapshot, path, depth: 1, ...extra };
+  if (state.compare) params.compare = state.compare;
+  const data = await api("/api/tree", params);
+  if (data.snapshot !== state.snapshot) return data;
+  for (const [dir, listing] of Object.entries(data.dirs)) cache().set(dir, listing);
+  state.excludes = data.excludes;
+  state.previous = data.previous;
+  return data;
+}
+
+// Read what the tree shows: the root, then each open folder whose parent is open and has it.
+async function loadTree() {
+  const key = treeKey();
+  if (!state.expanded) {
+    state.expanded = restoreExpanded();
+    state.autoOpen = !state.expanded;  // first visit: open folders that are alone in their parent
+    state.expanded ??= new Set();
+  }
+  setNote("");
+  try {
+    let level = ["/"];
+    while (level.length) {
+      await Promise.all(level.filter((path) => !cache().has(path)).map((path) => fetchTree(path)));
+      if (key !== treeKey()) return;  // another snapshot was chosen meanwhile
+      const next = [];
+      for (const path of level) {
+        const dirs = (cache().get(path)?.entries || []).filter((e) => e.type === "dir");
+        if (state.autoOpen && level.length === 1 && dirs.length === 1) state.expanded.add(joinPath(path, dirs[0].name));
+        for (const dir of dirs) {
+          const child = joinPath(path, dir.name);
+          if (state.expanded.has(child)) next.push(child);
+        }
+      }
+      level = next;
+    }
+  } catch (error) {
+    setNote(error.message);
+    return;
+  }
+  state.autoOpen = false;
+  saveExpanded();
+  writeHash(false);
+  renderSnapshotInfo();
+  renderTree();
+}
+
+function setNote(text) {
+  $("#listing-note").hidden = !text;
+  $("#listing-note").textContent = text;
+}
+
 function sortEntries(entries) {
   const { key, asc } = state.sort;
-  const value = (e) => (key === "status" ? STATUS_ORDER[e.status] ?? 9 : e[key]);
+  const value = (e) => (key === "status" ? STATUS_ORDER[e.status] ?? 9
+    : key === "delta" ? (e.size ?? 0) - (e.prev_size ?? 0) : e[key]);
   return [...entries].sort((a, b) => {
     if (key === "name" && (a.type === "dir") !== (b.type === "dir")) return a.type === "dir" ? -1 : 1;
     const va = value(a), vb = value(b);
@@ -314,24 +434,36 @@ function sortEntries(entries) {
   });
 }
 
-function renderListing(note = "") {
-  const { dir } = state;
-  const rows = sortEntries(dir.entries).map((entry) => entryRow(entry, false));
-  const removed = dir.removed;
-  if (state.showRemoved && removed.length) {
-    const previous = state.snapshots.find((s) => s.id === dir.previous);
-    rows.push(el("tr", { class: "separator" }, el("td", { colspan: 6 },
-      `Removed since ${previous ? formatDate(snapshotDate(previous)) : "the previous snapshot"}`)));
-    rows.push(...sortEntries(removed).map((entry) => entryRow(entry, true)));
-  }
+function renderTree() {
+  const rows = [];
+  let removedShown = 0, removedTotal = 0;
+  const walk = (path, depth, parentSize) => {
+    const listing = cache().get(path);
+    if (!listing) {
+      rows.push(noteRow(depth, "Reading…"));
+      return;
+    }
+    let entries = sortEntries(listing.entries);
+    if (state.compare) entries = entries.filter((e) => e.status);  // only what differs
+    for (const entry of entries) {
+      const child = joinPath(path, entry.name);
+      rows.push(entryRow(entry, child, depth, parentSize, false));
+      if (entry.type === "dir" && state.expanded.has(child)) walk(child, depth + 1, entry.size);
+    }
+    removedTotal += listing.removed.length;
+    const removed = state.compare || state.showRemoved ? sortEntries(listing.removed) : [];
+    removedShown += removed.length;
+    for (const entry of removed) rows.push(entryRow(entry, joinPath(path, entry.name), depth, parentSize, true));
+    if (!entries.length && !removed.length) {
+      rows.push(noteRow(depth, state.compare ? "No differences here." : "Empty folder."));
+    }
+  };
+  walk("/", 0, current()?.size);
   $("#listing tbody").replaceChildren(...rows);
-
-  const notes = [note, dir.entries.length ? "" : "This folder is empty in this snapshot."].filter(Boolean);
-  $("#listing-note").hidden = !notes.length;
-  $("#listing-note").textContent = notes.join(" ");
-  $("#removed-count").textContent = dir.previous ? `(${count(removed.length)})` : "";
-  $("#show-removed").disabled = !dir.previous || !removed.length;
-
+  $("#listing").classList.toggle("comparing", Boolean(state.compare));
+  $("#removed-toggle").hidden = Boolean(state.compare);
+  $("#removed-count").textContent = state.previous ? `(${count(removedTotal)} in the open folders)` : "";
+  $("#show-removed").disabled = !state.previous;
   for (const th of document.querySelectorAll("#listing th[data-sort]")) {
     const sorted = th.dataset.sort === state.sort.key;
     th.classList.toggle("sorted", sorted);
@@ -339,24 +471,43 @@ function renderListing(note = "") {
   }
 }
 
-function entryRow(entry, removed) {
-  const path = joinPath(state.dir.path, entry.name);
+function noteRow(depth, text) {
+  const cell = el("td", { colspan: 8, class: "muted" }, text);
+  cell.style.paddingLeft = `${30 + depth * 18}px`;
+  return el("tr", { class: "note" }, cell);
+}
+
+function entryRow(entry, path, depth, parentSize, removed) {
   const isDir = entry.type === "dir";
-  const kind = isDir ? "▸" : entry.type === "symlink" ? "↪" : "";
+  const open = isDir && state.expanded.has(path);
+  const toggle = isDir && !removed
+    ? el("button", { type: "button", class: "twisty", "aria-expanded": open ? "true" : "false",
+      "aria-label": `${open ? "Close" : "Open"} ${entry.name}`, onclick: () => toggleFolder(path) }, open ? "▾" : "▸")
+    : el("span", { class: "twisty", "aria-hidden": "true" }, entry.type === "symlink" ? "↪" : "");
   const name = el("button", {
     type: "button", class: "link name",
-    onclick: isDir && !removed ? () => navigate(path) : () => openDetail(path),
-  }, el("span", { class: "kind", "aria-hidden": "true" }, kind), entry.name,
+    onclick: isDir && !removed ? () => toggleFolder(path) : () => openDetail(path),
+  }, entry.name,
   entry.excluded ? el("span", { class: "badge excluded", title: `Excluded from the next backups by: ${entry.excluded}` },
     "excluded") : null);
+  const nameCell = el("td", { class: "tree-name" }, el("span", { class: "tree-line" }, toggle, name));
+  nameCell.style.paddingLeft = `${6 + depth * 18}px`;
+
+  const share = parentSize ? Math.min(1, (entry.size || 0) / parentSize) : 0;
+  const bar = el("span", { class: "sizebar", "aria-hidden": "true" }, el("i"));
+  bar.firstChild.style.width = `${(share * 100).toFixed(1)}%`;
+  const delta = removed ? -(entry.size || 0) : (entry.size || 0) - (entry.prev_size ?? 0);
   const status = removed ? "removed" : entry.status;
-  return el("tr", {
+
+  const row = el("tr", {
     class: [isDir ? "dir" : "", removed ? "removed" : "", entry.excluded ? "excluded" : "",
       state.detailPath === path ? "selected" : ""].filter(Boolean).join(" ") || null,
     "data-path": path,
   },
-  el("td", {}, name),
-  el("td", { class: "num" }, formatSize(entry.size)),
+  nameCell,
+  el("td", { class: "num size" }, formatSize(entry.size), bar),
+  el("td", { class: `num delta ${delta > 0 ? "up" : delta < 0 ? "down" : ""}` },
+    delta ? `${delta > 0 ? "+" : "−"}${formatSize(Math.abs(delta))}` : ""),
   el("td", { class: "num" }, isDir ? count(entry.files) : ""),
   el("td", {}, formatDate(mtimeDate(entry.mtime_us))),
   el("td", {}, status ? el("span", { class: `badge ${status}` }, STATUS_LABEL[status]) : ""),
@@ -365,12 +516,87 @@ function entryRow(entry, removed) {
     onclick: () => openDetail(path),
   }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
     svg("polyline", { points: "1,13 5,8 8,10 11,4 15,6", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }))),
-  removed || !state.dir.excludes ? null : excludeButton(entry)));
+  removed || !state.excludes ? null : excludeButton(entry, path)));
+  if (isDir && !removed) row.addEventListener("contextmenu", (event) => openMenu(event, path));
+  return row;
+}
+
+function toggleFolder(path) {
+  if (state.expanded.has(path)) state.expanded.delete(path);
+  else state.expanded.add(path);
+  loadTree();
+}
+
+// ---- right-click menu on a folder --------------------------------------------------------
+
+function openMenu(event, path) {
+  event.preventDefault();
+  const menu = $("#tree-menu");
+  const item = (label, action) => el("button", { type: "button", role: "menuitem", onclick: () => {
+    closeMenu();
+    action();
+  } }, label);
+  menu.replaceChildren(
+    el("div", { class: "menu-title" }, path.slice(path.lastIndexOf("/") + 1) || "/"),
+    item("Expand one level", () => expandOneLevel(path)),
+    item("Expand all", () => expandAll(path)),
+    item("Collapse all", () => collapseAll(path)),
+    el("hr"),
+    item("Size over time", () => openDetail(path)));
+  menu.hidden = false;
+  const { innerWidth, innerHeight } = window;
+  const box = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(event.clientX, innerWidth - box.width - 8)}px`;
+  menu.style.top = `${Math.min(event.clientY, innerHeight - box.height - 8)}px`;
+  menu.querySelector("button")?.focus();
+}
+
+function closeMenu() {
+  $("#tree-menu").hidden = true;
+}
+
+// The folder and its immediate subfolders open.
+async function expandOneLevel(path) {
+  state.expanded.add(path);
+  try {
+    await fetchTree(path, { depth: 2 });
+  } catch (error) {
+    setNote(error.message);
+    return;
+  }
+  for (const dir of (cache().get(path)?.entries || []).filter((e) => e.type === "dir" && (e.status || !state.compare))) {
+    state.expanded.add(joinPath(path, dir.name));
+  }
+  loadTree();
+}
+
+// Everything below the folder opens (when comparing, only where something changed).
+async function expandAll(path) {
+  setNote("Opening everything below…");
+  let data;
+  try {
+    data = await fetchTree(path, { depth: 1000, limit: EXPAND_ALL_LIMIT, ...(state.compare ? { changed_only: 1 } : {}) });
+  } catch (error) {
+    setNote(error.message);
+    return;
+  }
+  for (const dir of Object.keys(data.dirs)) state.expanded.add(dir);
+  await loadTree();
+  if (data.truncated) {
+    setNote(`Stopped after about ${count(EXPAND_ALL_LIMIT)} entries: open the deeper folders one by one.`);
+  }
+}
+
+function collapseAll(path) {
+  for (const open of [...state.expanded]) {
+    if (open === path || open.startsWith(`${path === "/" ? "" : path}/`)) state.expanded.delete(open);
+  }
+  loadTree();
 }
 
 // ---- excluding from the next backups ---------------------------------------------------
 
-function excludeButton(entry) {
+function excludeButton(entry, path) {
   const ownLine = entry.excluded === entry.native;  // a line for exactly this path: it can be taken out
   if (entry.excluded && !ownLine) {
     return el("button", { type: "button", class: "history", disabled: true,
@@ -381,7 +607,7 @@ function excludeButton(entry) {
     type: "button", class: entry.excluded ? "history active" : "history",
     title: entry.excluded ? "Back up again from the next backup" : "Exclude from the next backups",
     "aria-label": `${entry.excluded ? "Include" : "Exclude"} ${entry.name}`,
-    onclick: () => (entry.excluded ? includeAgain(entry) : exclude(entry)),
+    onclick: () => (entry.excluded ? includeAgain(entry) : exclude(entry, path)),
   }, excludeIcon());
 }
 
@@ -389,18 +615,19 @@ const excludeIcon = () => svg("svg", { width: 16, height: 16, viewBox: "0 0 16 1
   svg("circle", { cx: 8, cy: 8, r: 6, fill: "none", stroke: "currentColor", "stroke-width": 1.6 }),
   svg("line", { x1: 3.8, y1: 12.2, x2: 12.2, y2: 3.8, stroke: "currentColor", "stroke-width": 1.6 }));
 
-async function exclude(entry) {
+async function exclude(entry, path) {
   const what = entry.type === "dir" ? "this folder and everything in it" : "this file";
   if (!confirm(`Exclude ${what} from the next backups?\n\n${entry.native}\n\n` +
     "The snapshots already made keep it (taking it out of them is a separate step that rewrites " +
     "them). The line goes into the exclude file of your backup job.")) return;
   try {
-    await post("/api/excludes", { path: joinPath(state.dir.path, entry.name) });
+    await post("/api/excludes", { path });
   } catch (error) {
     showBanner(error.message, true);
     return;
   }
-  loadDir(false);
+  state.cacheKey = null;  // every listing marks what is excluded
+  loadTree();
 }
 
 async function includeAgain(entry) {
@@ -411,7 +638,8 @@ async function includeAgain(entry) {
     showBanner(error.message, true);
     return;
   }
-  loadDir(false);
+  state.cacheKey = null;
+  loadTree();
 }
 
 // ---- size over time ------------------------------------------------------------------
@@ -534,20 +762,20 @@ function bind() {
   $("#series").addEventListener("change", (event) => {
     state.series = Number(event.target.value);
     state.snapshot = null;
-    state.path = "/";
-    state.dir = null;
+    state.compare = null;
+    state.picked.clear();
     closeDetail();
     loadSnapshots();
   });
   $("#show-removed").addEventListener("change", (event) => {
     state.showRemoved = event.target.checked;
-    renderListing();
+    renderTree();
   });
   for (const th of document.querySelectorAll("#listing th[data-sort]")) {
     th.addEventListener("click", () => {
       const key = th.dataset.sort;
       state.sort = { key, asc: state.sort.key === key ? !state.sort.asc : key === "name" };
-      renderListing();
+      renderTree();
     });
   }
   $("#detail-close").addEventListener("click", closeDetail);
@@ -559,25 +787,35 @@ function bind() {
   });
   for (const name of TABS) $(`#tab-${name}`).addEventListener("click", () => showTab(name));
   window.addEventListener("popstate", () => {
-    const { tab, snapshot, path } = readHash();
+    const { tab, snapshot, compare } = readHash();
     if (tab !== state.tab) {
       showTab(tab, false);
       if (tab !== "browse") return;
     }
-    state.path = path;
-    if (snapshot && snapshot !== state.snapshot) select(snapshot, false);
-    else if (state.snapshot) loadDir(false);
+    if (!snapshot) return;
+    state.snapshot = snapshot;
+    state.compare = compare;
+    markBars();
+    loadTree();
   });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("#tree-menu")) closeMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMenu();
+  });
+  window.addEventListener("scroll", closeMenu, { passive: true });
   settings.init({ ready: becameReady });
   retention.init();
 }
 
 async function init() {
   bind();
-  const { tab, snapshot, path } = readHash();
+  const { tab, snapshot, compare } = readHash();
   state.tab = tab;  // before loading, so the address keeps the tab meanwhile
   state.snapshot = snapshot;
-  state.path = path;
+  state.compare = compare;
+  renderPickBar();
   await refreshStatus();
   if (state.status?.ready && !state.snapshots.length) await loadSnapshots();
   showTab(state.tab, false);  // the tab may have changed meanwhile (back button)

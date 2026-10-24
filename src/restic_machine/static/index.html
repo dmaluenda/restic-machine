@@ -32,9 +32,8 @@
     <section class="timeline" aria-label="Snapshots">
       <div id="bars" class="bars" role="listbox" tabindex="0" aria-label="Snapshots, oldest to newest"></div>
       <div id="snapshot-info" class="snapshot-info"></div>
+      <div id="pick-bar" class="pick-bar"></div>
     </section>
-
-    <nav id="crumbs" class="crumbs" aria-label="Folder"></nav>
 
     <main class="content">
       <section class="listing">
@@ -43,6 +42,7 @@
             <tr>
               <th data-sort="name" scope="col">Name</th>
               <th data-sort="size" scope="col" class="num">Size</th>
+              <th data-sort="delta" scope="col" class="num delta">Change in size</th>
               <th data-sort="files" scope="col" class="num">Files</th>
               <th data-sort="mtime_us" scope="col">Modified</th>
               <th data-sort="status" scope="col">Change</th>
@@ -52,7 +52,8 @@
           <tbody></tbody>
         </table>
         <p id="listing-note" class="muted" hidden></p>
-        <label class="toggle"><input type="checkbox" id="show-removed"> Show what was removed since the previous snapshot <span id="removed-count" class="muted"></span></label>
+        <label class="toggle" id="removed-toggle"><input type="checkbox" id="show-removed"> Show what was removed since the previous snapshot <span id="removed-count" class="muted"></span></label>
+        <p class="hint tree-hint">Right-click a folder to expand one level, expand everything below it, or collapse it.</p>
       </section>
 
       <aside id="detail" class="detail" hidden>
@@ -165,6 +166,9 @@
     <form id="settings-form" class="form" autocomplete="off">
       <fieldset>
         <legend>Repository</legend>
+        <label class="wide">Name
+          <input name="name" spellcheck="false" placeholder="e.g. Laptop, Office server — shown next to its id">
+        </label>
         <label class="wide">Location
           <input name="repository" spellcheck="false" data-placeholder="e.g. /srv/restic, sftp:user@host:/srv/restic, s3:…">
         </label>
@@ -207,6 +211,8 @@
       <p class="hint">Saved in <code id="settings-file"></code><span id="settings-env"></span>.</p>
     </form>
   </div>
+
+  <div id="tree-menu" class="tree-menu" role="menu" hidden></div>
 
   <footer class="footer">
     <span id="attribution">restic-machine by David Maluenda</span> ·

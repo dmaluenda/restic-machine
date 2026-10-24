@@ -107,15 +107,17 @@ def _sorted(entries: list[dict]) -> list[dict]:
 
 def list_dir(con: sqlite3.Connection, snap: sqlite3.Row, path: str = "/",
              previous: sqlite3.Row | None = None) -> list[dict]:
-    """A directory as it was in `snap`, directories first. Against `previous`, each entry
-    gets a status: "added", "modified" (a file, or a type change), "changed" (a directory
-    with something changed below it) or None."""
+    """A directory as it was in `snap`, directories first. Against `previous` (any earlier
+    snapshot of the same series), each entry gets a status: "added", "modified" (a file, or a
+    type change), "changed" (a directory with something changed below it) or None, and its
+    size and file count then (`prev_size`, `prev_files`; None if it wasn't there)."""
     args = {"dir": _directory(con, snap, path), "series": snap["series"], "seq": snap["seq"],
             "prev": previous["seq"] if previous is not None else None}
     rows = con.execute(
         "SELECT p.name, v.type, v.size, v.mtime_us, t.id AS total_id, t.size AS total_size,"
         " t.files AS total_files, pv.type AS prev_type, pv.size AS prev_size,"
-        " pv.mtime_us AS prev_mtime, pt.id AS prev_total_id"
+        " pv.mtime_us AS prev_mtime, pt.id AS prev_total_id, pt.size AS prev_total_size,"
+        " pt.files AS prev_total_files"
         " FROM path p"
         f" JOIN version v ON v.path = p.id AND {_ALIVE.format(t='v', seq='seq')}"
         f" LEFT JOIN dir_total t ON t.path = p.id AND {_ALIVE.format(t='t', seq='seq')}"
@@ -127,6 +129,9 @@ def list_dir(con: sqlite3.Connection, snap: sqlite3.Row, path: str = "/",
         entry = _entry(row["name"], row["type"], row["size"], row["mtime_us"],
                        row["total_size"], row["total_files"])
         if previous is not None:
+            was_dir = row["prev_type"] == DIR
+            entry["prev_size"] = (row["prev_total_size"] or 0) if was_dir else row["prev_size"]
+            entry["prev_files"] = (row["prev_total_files"] or 0) if was_dir else None
             if row["prev_type"] is None:
                 entry["status"] = "added"
             elif row["prev_type"] != row["type"]:

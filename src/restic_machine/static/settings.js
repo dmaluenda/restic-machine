@@ -4,7 +4,7 @@
 
 import { $, api, post } from "./common.js";
 
-const FIELDS = ["repository", "password_file", "password_command", "restic_binary", "data_dir",
+const FIELDS = ["name", "repository", "password_file", "password_command", "restic_binary", "data_dir",
   "forgotten_retention_days", "excludes_file"];
 const FROM_ENV = { repository: "RESTIC_REPOSITORY", password_file: "RESTIC_PASSWORD_FILE",
   password_command: "RESTIC_PASSWORD_COMMAND" };

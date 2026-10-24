@@ -13,10 +13,12 @@ In your browser you get:
 
 - **Browse:** a timeline of the snapshots, each bar as tall as the number of changes it
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
-  tree as it was in the chosen snapshot, with the size and file count of every folder, and
-  what is new, modified or removed since the previous snapshot; the size of any file or
-  folder over time; and a button to leave a file or folder out of the next backups (it adds
-  the path to your backup's exclude file).
+  tree as it was in the chosen snapshot (open folders in place, right-click one to expand a
+  level, everything below it, or collapse it), with the size and file count of every folder,
+  and what is new, modified or removed since the previous snapshot; Ctrl+click two snapshots
+  and Compare to see only what changed between them, with the change in size; the size of
+  any file or folder over time; and a button to leave a file or folder out of the next
+  backups (it adds the path to your backup's exclude file).
 - **Retention:** the retention policy (which snapshots to keep), a calendar of what it
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.

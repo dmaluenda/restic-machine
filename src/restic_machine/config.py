@@ -76,6 +76,7 @@ class Config:
     forgotten_retention_days: int = 30
     retention: dict = field(default_factory=dict)  # see normalize_policy()
     excludes_file: Path | None = None  # the --exclude-file of the backup job
+    name: str = ""  # what the user calls the repository (shown with its id)
     source: Path | None = None
 
     def _effective(self, var: str) -> str | None:
@@ -119,6 +120,7 @@ class Config:
             "data_dir": str(self.data_dir),
             "forgotten_retention_days": self.forgotten_retention_days,
             "excludes_file": str(self.excludes_file) if self.excludes_file else "",
+            "name": self.name,
             "env_names": sorted(k for k, v in self.restic_env.items()
                                 if v is not None and k not in _RESTIC_KEYS.values()),
         }
@@ -142,6 +144,8 @@ class Config:
         if "data_dir" in values:
             value = str(values["data_dir"] or "").strip()
             new.data_dir = Path(value).expanduser() if value else default_data_dir()
+        if "name" in values:
+            new.name = str(values["name"] or "").strip()
         if "excludes_file" in values:
             value = str(values["excludes_file"] or "").strip()
             new.excludes_file = Path(value).expanduser() if value else None
@@ -244,6 +248,7 @@ def load(path: Path | None = None) -> Config:
         cfg.forgotten_retention_days = days
     if "retention" in raw:
         cfg.retention = normalize_policy(raw["retention"], f"{path} [retention]")
+    cfg.name = str(raw.get("repository", {}).get("name", "")).strip()
     backup = raw.get("backup", {})
     if backup.get("excludes_file"):
         cfg.excludes_file = Path(str(backup["excludes_file"])).expanduser()
@@ -263,6 +268,8 @@ def dump(cfg: Config) -> str:
     """The config file for `cfg`, with only what differs from the defaults."""
     lines = ["# restic-machine configuration. Written by restic-machine (its Settings page);",
              "# you may edit it by hand too. See config.example.toml for every setting.", ""]
+    if cfg.name:
+        lines += ["[repository]", f"name = {_toml(cfg.name)}", ""]
     restic = []
     if cfg.restic_binary != "restic":
         restic.append(f"binary = {_toml(cfg.restic_binary)}")
