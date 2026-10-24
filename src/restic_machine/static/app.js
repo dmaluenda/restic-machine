@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 David Maluenda
-"use strict";
-
-const $ = (selector) => document.querySelector(selector);
+import {
+  $, api, count, el, formatDate, formatDay, formatSize, mtimeDate, post, snapshotDate, svg,
+} from "./common.js";
+import * as repository from "./repository.js";
+import * as settings from "./settings.js";
 
 const state = {
+  tab: "browse",
   status: null,
   snapshots: [],          // visible snapshots of the current series, oldest first
   series: null,
@@ -19,64 +22,6 @@ const state = {
 };
 let statusTimer = null;
 
-// ---- small helpers -------------------------------------------------------------------
-
-async function api(path, params = {}) {
-  const url = new URL(path, location.origin);
-  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  const response = await fetch(url, { credentials: "same-origin" });
-  const data = await response.json().catch(() => ({ error: response.statusText }));
-  if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { status: response.status });
-  return data;
-}
-
-async function post(path) {
-  const response = await fetch(path, {
-    method: "POST", credentials: "same-origin", headers: { "X-Restic-Machine": "1" },
-  });
-  const data = await response.json().catch(() => ({ error: response.statusText }));
-  if (!response.ok) throw new Error(data.error || response.statusText);
-  return data;
-}
-
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  setAttributes(node, attrs);
-  for (const child of children.flat()) if (child != null) node.append(child);
-  return node;
-}
-
-function svg(tag, attrs = {}, ...children) {
-  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-  setAttributes(node, attrs);
-  for (const child of children.flat()) if (child != null) node.append(child);
-  return node;
-}
-
-function setAttributes(node, attrs) {
-  for (const [key, value] of Object.entries(attrs)) {
-    if (value == null || value === false) continue;
-    if (key === "class") node.setAttribute("class", value);
-    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else node.setAttribute(key, value === true ? "" : value);
-  }
-}
-
-function formatSize(bytes) {
-  if (bytes == null) return "";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let value = bytes, unit = 0;
-  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
-  return unit === 0 ? `${value} B` : `${value.toFixed(value < 10 ? 2 : 1)} ${units[unit]}`;
-}
-
-const count = (n) => (n == null ? "" : n.toLocaleString());
-const pad = (n) => String(n).padStart(2, "0");
-const formatDay = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const formatDate = (d) => (d ? `${formatDay(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}` : "");
-// restic writes nanoseconds; keep milliseconds so every browser parses it
-const snapshotDate = (s) => new Date(s.time.replace(/(\.\d{3})\d+/, "$1"));
-const mtimeDate = (us) => (us == null ? null : new Date(us / 1000));
 const changesOf = (s) => (s.added == null ? null : s.added + s.modified + s.removed);
 const joinPath = (dir, name) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
 const parentOf = (path) => (path.lastIndexOf("/") <= 0 ? "/" : path.slice(0, path.lastIndexOf("/")));
@@ -97,16 +42,40 @@ function showBanner(message, warning = false) {
   banner.classList.toggle("warning", warning);
 }
 
-// ---- address bar: #snapshot=…&path=… -------------------------------------------------
+// ---- address bar: #snapshot=…&path=… (Browse) or #tab=… --------------------------------
 
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  return { snapshot: params.get("snapshot"), path: params.get("path") || "/" };
+  return { tab: params.get("tab") || "browse", snapshot: params.get("snapshot"), path: params.get("path") || "/" };
 }
 
 function writeHash(push) {
-  const hash = "#" + new URLSearchParams({ snapshot: state.snapshot, path: state.path });
+  const params = state.tab !== "browse" ? { tab: state.tab }
+    : state.snapshot ? { snapshot: state.snapshot, path: state.path } : {};
+  const hash = "#" + new URLSearchParams(params);
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
+}
+
+// ---- tabs: Browse, Repository, Settings ------------------------------------------------
+
+const TABS = ["browse", "repository", "settings"];
+
+function showTab(tab, push = true) {
+  if (!state.status?.ready) tab = "settings";  // nothing else works without a repository
+  state.tab = tab;
+  for (const name of TABS) {
+    $(`#view-${name}`).hidden = name !== tab;
+    $(`#tab-${name}`).setAttribute("aria-selected", name === tab ? "true" : "false");
+  }
+  if (tab === "settings") settings.load();
+  else if (tab === "repository") repository.load();
+  writeHash(push);
+}
+
+async function becameReady() {
+  await refreshStatus();
+  if (!state.snapshots.length) await loadSnapshots();
+  showTab("browse");
 }
 
 // ---- status and indexing -------------------------------------------------------------
@@ -127,7 +96,7 @@ async function refreshStatus() {
   state.status = status;
   renderStatus();
   const indexing = status.indexing;
-  if ((wasRunning && !indexing.running) || (indexing.running && indexing.done !== state.lastDone)) {
+  if (status.ready && ((wasRunning && !indexing.running) || (indexing.running && indexing.done !== state.lastDone))) {
     state.lastDone = indexing.done;
     await loadSnapshots();
   }
@@ -137,8 +106,10 @@ async function refreshStatus() {
 function renderStatus() {
   const { status } = state;
   const indexing = status.indexing;
-  $("#repo").textContent = `repository ${status.repository.slice(0, 8)}`;
-  $("#repo").title = status.repository;
+  $("#repo").textContent = status.ready ? `repository ${status.repository.slice(0, 8)}` : "not set up yet";
+  $("#repo").title = status.repository || "";
+  for (const name of ["browse", "repository"]) $(`#tab-${name}`).disabled = !status.ready;
+  $("#reindex").hidden = !status.ready;
   $("#attribution").textContent = status.attribution;
   $("#version").textContent = `v${status.version}`;
 
@@ -537,21 +508,30 @@ function bind() {
     event.preventDefault();
     step(Math.max(-1e6, Math.min(1e6, moves[event.key])));
   });
+  for (const name of TABS) $(`#tab-${name}`).addEventListener("click", () => showTab(name));
   window.addEventListener("popstate", () => {
-    const { snapshot, path } = readHash();
+    const { tab, snapshot, path } = readHash();
+    if (tab !== state.tab) {
+      showTab(tab, false);
+      if (tab !== "browse") return;
+    }
     state.path = path;
     if (snapshot && snapshot !== state.snapshot) select(snapshot, false);
-    else loadDir(false);
+    else if (state.snapshot) loadDir(false);
   });
+  settings.init({ ready: becameReady });
+  repository.init();
 }
 
 async function init() {
   bind();
-  const { snapshot, path } = readHash();
+  const { tab, snapshot, path } = readHash();
+  state.tab = tab;  // before loading, so the address keeps the tab meanwhile
   state.snapshot = snapshot;
   state.path = path;
   await refreshStatus();
-  if (!state.snapshots.length) await loadSnapshots();
+  if (state.status?.ready && !state.snapshots.length) await loadSnapshots();
+  showTab(state.tab, false);  // the tab may have changed meanwhile (back button)
 }
 
 init();

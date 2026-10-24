@@ -27,7 +27,8 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(errors="backslashreplace")
+        if hasattr(stream, "reconfigure"):  # not a plain file when embedded or tested
+            stream.reconfigure(errors="backslashreplace")
     logging.basicConfig(format="restic-machine: %(message)s", level=logging.INFO)
     try:
         cfg = config.load(args.config)
@@ -85,6 +86,14 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--idle-timeout", type=float, default=0, metavar="MINUTES",
                        help="stop this long after the last browser tab is closed (default: never)")
     serve.set_defaults(command=cmd_serve)
+
+    forget = commands.add_parser(
+        "forget", help="apply the retention policy of the config file (removes snapshots!)",
+        description="Apply the [retention] policy of the config file with `restic forget` (and"
+                    " --prune if the policy says so). This changes the repository: run it from"
+                    " the backup job, like restic's own forget. Edit the policy in the web page.")
+    forget.add_argument("--dry-run", action="store_true", help="only show what it would keep and remove")
+    forget.set_defaults(command=cmd_forget)
     return parser
 
 
@@ -177,10 +186,8 @@ def cmd_info(cfg: config.Config, args) -> int:
 
 
 def cmd_serve(cfg: config.Config, args) -> int:
-    con, restic, repository_id, available = _open(cfg, offline_ok=True)
-    con.close()
-    index_path = db.index_file(cfg.data_dir, repository_id)
-    runtime = index_path.with_name("server.json")
+    # One server per user, found through a runtime file in the data directory.
+    runtime = config.default_data_dir() / "server.json"
     running = server.running_instance(runtime)
     if running:
         print(f"restic-machine is already running at {running}", flush=True)
@@ -189,11 +196,13 @@ def cmd_serve(cfg: config.Config, args) -> int:
         return 0
 
     idle_timeout = args.idle_timeout * 60 if args.idle_timeout else None
-    app = server.App(index_path, restic, repository_id, available, idle_timeout)
+    app = server.App(cfg, idle_timeout)  # with no usable repository, it opens on the settings page
+    if app.problem:
+        _err(f"not ready yet ({app.problem}): see the settings page")
     httpd = server.make_server(app, args.port)
     url = server.url_of(httpd.server_address[1], app.token)
     server.write_runtime(runtime, httpd.server_address[1], app.token)
-    if available and not args.no_index:
+    if not app.indexing["unavailable"] and not args.no_index:
         app.start_indexing()
     print(f"restic-machine is running at {url}\n"
           "(the link is the key: keep it private). Press Ctrl+C or the Stop button to stop.", flush=True)
@@ -208,6 +217,32 @@ def cmd_serve(cfg: config.Config, args) -> int:
         server.remove_runtime(runtime, app.token)
     print("restic-machine stopped", flush=True)
     return 0
+
+
+def cmd_forget(cfg: config.Config, args) -> int:
+    policy = cfg.retention
+    if not config.has_rules(policy):
+        raise config.ConfigError(f"no retention policy in {cfg.path}: set one in the web page (Repository)"
+                                 " or under [retention]")
+    cfg.repository_label()
+    cfg.check_password_source()
+    restic = Restic(cfg.restic_binary, cfg.restic_env)
+    policy_args = config.forget_args(policy)
+    if args.dry_run:
+        kept = removed = 0
+        for group in restic.forget_preview(policy_args):
+            reasons = {r["snapshot"]["id"]: r["matches"] for r in group.get("reasons") or []}
+            for snap in group.get("keep") or []:
+                kept += 1
+                print(f"keep    {_when(snap['time'])}  {snap['id'][:8]}  {', '.join(reasons.get(snap['id'], []))}")
+            for snap in group.get("remove") or []:
+                removed += 1
+                print(f"remove  {_when(snap['time'])}  {snap['id'][:8]}")
+        print(f"would keep {kept} snapshot(s) and remove {removed}"
+              f"{', then prune' if policy.get('prune') and removed else ''}")
+        return 0
+    print(f"restic-machine: applying the retention policy of {cfg.path}", flush=True)
+    return restic.forget(policy_args, policy.get("prune", True))
 
 
 def _print_progress(event: str, **info) -> None:

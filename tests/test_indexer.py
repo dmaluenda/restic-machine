@@ -47,8 +47,19 @@ class FakeRestic:
     def forget(self, n):
         del self.repo[snapshot_id(n)]
 
+    def repository_id(self):
+        return "f" * 64
+
     def snapshots(self):
         return [info for info, _ in self.repo.values()]
+
+    def forget_preview(self, args):
+        """Enough of `restic forget --dry-run --json` for the tests: --keep-last N only."""
+        n = int(args[args.index("--keep-last") + 1])
+        newest_first = sorted(self.snapshots(), key=lambda info: info["time"], reverse=True)
+        keep = newest_first[:n]
+        return [{"keep": keep, "remove": newest_first[n:],
+                 "reasons": [{"snapshot": info, "matches": ["last snapshot"]} for info in keep]}]
 
     def ls(self, restic_id):
         self.ls_calls.append(restic_id)

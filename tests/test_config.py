@@ -61,6 +61,44 @@ class ConfigTest(unittest.TestCase):
             with self.assertRaises(config.ConfigError):
                 cfg.check_password_source()
 
+    def test_retention_policy(self):
+        policy = config.normalize_policy({"keep_last": 32, "keep_daily": 7, "keep_hourly": 0,
+                                          "keep_within": "1y6m", "keep_tag": "keep, important"})
+        self.assertEqual(policy, {"keep_last": 32, "keep_daily": 7, "keep_within": "1y6m",
+                                  "keep_tag": ["keep", "important"], "prune": True})
+        self.assertEqual(config.forget_args(policy), [
+            "--keep-last", "32", "--keep-daily", "7", "--keep-within", "1y6m",
+            "--keep-tag", "keep", "--keep-tag", "important"])
+        self.assertFalse(config.has_rules(config.normalize_policy({"prune": False})))
+        for wrong in ({"keep_daily": -1}, {"keep_daily": "7"}, {"keep_within": "6 months"},
+                      {"group_by": "hostname"}, {"prune": "yes"}):
+            with self.assertRaises(config.ConfigError, msg=wrong):
+                config.normalize_policy(wrong)
+
+    def test_saved_file_reads_back_the_same(self):
+        cfg = config.Config(source=self.dir / "config.toml", restic_binary="C:/tools/restic.exe",
+                            restic_env={"RESTIC_REPOSITORY": "sftp:nas:/srv/restic", "AWS_PROFILE": "backup",
+                                        "RESTIC_PASSWORD_FILE": None},
+                            data_dir=self.dir / "index", forgotten_retention_days=10,
+                            retention={"keep_last": 3, "keep_tag": ["keep"], "prune": True})
+        config.save(cfg)
+        again = config.load(self.dir / "config.toml")
+        self.assertEqual((again.restic_binary, again.restic_env, again.data_dir,
+                          again.forgotten_retention_days, again.retention),
+                         ("C:/tools/restic.exe", {"RESTIC_REPOSITORY": "sftp:nas:/srv/restic", "AWS_PROFILE": "backup"},
+                          self.dir / "index", 10, {"keep_last": 3, "keep_tag": ["keep"], "prune": True}))
+
+    def test_settings_from_the_web_page(self):
+        cfg = config.Config(restic_env={"RESTIC_REPOSITORY": "old"})
+        new = cfg.with_settings({"repository": "", "password_file": "~/pw.txt", "restic_binary": "",
+                                 "forgotten_retention_days": 5})
+        self.assertNotIn("RESTIC_REPOSITORY", new.restic_env)  # empty: back to the environment variable
+        self.assertEqual(new.restic_env["RESTIC_PASSWORD_FILE"], os.path.expanduser("~/pw.txt"))
+        self.assertEqual((new.restic_binary, new.forgotten_retention_days), ("restic", 5))
+        self.assertEqual(cfg.restic_env, {"RESTIC_REPOSITORY": "old"})  # the original is untouched
+        with self.assertRaises(config.ConfigError):
+            cfg.with_settings({"forgotten_retention_days": "a week"})
+
 
 if __name__ == "__main__":
     unittest.main()

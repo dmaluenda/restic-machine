@@ -25,3 +25,18 @@
 # Snapshots removed by `restic forget` disappear from the timeline at once, but stay in
 # the index this many days, in case you want to look into what happened.
 # forgotten_retention_days = 30
+
+# The retention policy: which snapshots to keep. The Repository page shows and simulates
+# it; `restic-machine forget` applies it (run it from your backup job). Each rule is
+# restic's `--keep-<rule>`; leave out the ones you don't use.
+# [retention]
+# keep_last = 10
+# keep_hourly = 24
+# keep_daily = 7
+# keep_weekly = 8
+# keep_monthly = 24
+# keep_yearly = 10
+# keep_within = "14d"          # also keep_within_hourly, _daily, _weekly, _monthly, _yearly
+# keep_tag = ["keep"]
+# group_by = "host,paths"
+# prune = true                 # free the space after forgetting (default)

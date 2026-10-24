@@ -26,60 +26,107 @@ import time
 import traceback
 import zipfile
 from contextlib import closing
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, db, query
-from .indexer import IndexBusy, Indexer
-from .restic import RepositoryUnavailable, ResticError
+from . import __version__, config, db, query
+from .indexer import IndexBusy, Indexer, timestamp_us
+from .restic import RepositoryUnavailable, Restic, ResticError
 
 ATTRIBUTION = "restic-machine by David Maluenda"
 LICENSE = "AGPL-3.0-or-later"
 PACKAGE_DIR = Path(__file__).parent
 _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
-    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
+    **{f"/{name}": (name, "text/javascript; charset=utf-8")
+       for name in ("app.js", "common.js", "repository.js", "settings.js")},
 }
 _CSP = ("default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none';"
         " form-action 'none'; frame-ancestors 'none'")
 
 
-class App:
-    """What the request handlers share: the index, restic and the state of indexing."""
+class NotReady(Exception):
+    """There is no usable repository yet; the settings page says why."""
 
-    def __init__(self, index_path: Path, restic, repository_id: str, available: bool = True,
-                 idle_timeout: float | None = None):
-        self.index_path = index_path
-        self.restic = restic
-        self.repository_id = repository_id
+
+@dataclass
+class Repository:
+    restic: Restic
+    repository_id: str
+    index_path: Path
+
+
+class App:
+    """What the request handlers share: the configuration, the repository and its index, and
+    the state of indexing. Without a usable repository it still runs, so that the settings
+    page can put that right."""
+
+    def __init__(self, cfg: config.Config, idle_timeout: float | None = None, restic_factory=Restic):
+        self.cfg = cfg
+        self.restic_factory = restic_factory
         self.token = secrets.token_urlsafe(32)
         self.indexing = {"running": False, "done": 0, "total": 0, "current": None, "error": None,
-                         "unavailable": not available, "finished_at": None}
+                         "unavailable": False, "finished_at": None}
         # Stop by itself once no page has asked anything for this many seconds (None: never).
         # An open page asks for the status at least every 30 s.
         self.idle_timeout = idle_timeout
         self.last_seen = time.monotonic()
         self.stop = lambda: None  # set by make_server
+        self.repo: Repository | None = None
+        self.problem: str | None = None  # why there is no repository, for the settings page
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self.connect_repository()
+
+    def connect_repository(self) -> bool:
+        """(Re)open the configured repository and its index. Never raises: what is wrong
+        ends up in `problem`."""
+        self.repo, self.problem = None, None
+        try:
+            label = self.cfg.repository_label()
+            self.cfg.check_password_source()
+            restic = self.restic_factory(self.cfg.restic_binary, self.cfg.restic_env)
+            try:
+                repository_id = restic.repository_id()
+                db.remember_repository(self.cfg.data_dir, label, repository_id)
+                available = True
+            except RepositoryUnavailable:
+                repository_id = db.known_repository(self.cfg.data_dir, label)
+                if repository_id is None:
+                    raise
+                available = False  # its index can still be browsed as last updated
+            db.open_index(self.cfg.data_dir, repository_id).close()  # create or upgrade it now
+        except (config.ConfigError, ResticError, db.IndexSchemaError, OSError) as e:
+            self.problem = str(e)
+            return False
+        self.repo = Repository(restic, repository_id, db.index_file(self.cfg.data_dir, repository_id))
+        self.indexing["unavailable"] = not available
+        return True
+
+    def require_repo(self) -> Repository:
+        if self.repo is None:
+            raise NotReady(self.problem or "no repository configured")
+        return self.repo
 
     def connect(self):
-        return db.connect(self.index_path)
+        return db.connect(self.require_repo().index_path)
 
     def idle(self) -> bool:
         return (self.idle_timeout is not None and not self.indexing["running"]
                 and time.monotonic() - self.last_seen > self.idle_timeout)
 
     def start_indexing(self) -> bool:
-        """Read new snapshots in the background; False if that is already happening."""
+        """Read new snapshots in the background; False if that is already happening (or
+        there is no repository)."""
         with self._lock:
-            if self._thread is not None and self._thread.is_alive():
+            if self.repo is None or (self._thread is not None and self._thread.is_alive()):
                 return False
             self.indexing.update(running=True, done=0, total=0, current=None, error=None)
-            self._thread = threading.Thread(target=self._index, name="indexer", daemon=True)
+            self._thread = threading.Thread(target=self._index, args=(self.repo,), name="indexer", daemon=True)
             self._thread.start()
             return True
 
@@ -87,10 +134,10 @@ class App:
         if self._thread is not None:
             self._thread.join(timeout)
 
-    def _index(self) -> None:
+    def _index(self, repo: Repository) -> None:
         try:
-            with closing(self.connect()) as con:
-                Indexer(con, self.restic, progress=self._progress).run()
+            with closing(db.connect(repo.index_path)) as con:
+                Indexer(con, repo.restic, progress=self._progress).run()
             self.indexing["unavailable"] = False
         except RepositoryUnavailable as e:
             self.indexing.update(unavailable=True, error=f"repository temporarily unavailable: {e}")
@@ -141,6 +188,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             method(url.path, params)
         except ApiError as e:
             self._send_error(url.path, str(e), e.status)
+        except NotReady as e:
+            self._send_error(url.path, f"not ready: {e}", HTTPStatus.CONFLICT)
+        except RepositoryUnavailable as e:
+            self._send_error(url.path, f"repository temporarily unavailable: {e}", HTTPStatus.SERVICE_UNAVAILABLE)
         except LookupError as e:
             self._send_error(url.path, e.args[0] if e.args else str(e), HTTPStatus.NOT_FOUND)
         except Exception as e:
@@ -217,6 +268,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._dir(params))
         elif path == "/api/history":
             self._send_json(self._history(params))
+        elif path == "/api/settings":
+            self._send_json(self._settings())
+        elif path == "/api/retention":
+            self._send_json(self._retention())
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such page: {path}")
 
@@ -231,16 +286,108 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/stop":
             self._send_json({"stopping": True})
             self.app.stop()
+        elif path == "/api/settings":
+            self._send_json(self._save_settings(self._json_body()))
+        elif path == "/api/settings/test":
+            self._send_json(self._test_settings(self._json_body()))
+        elif path == "/api/retention":
+            self._send_json(self._save_retention(self._json_body()))
+        elif path == "/api/retention/simulate":
+            self._send_json(self._simulate(self._json_body()))
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such action: {path}")
 
+    def _json_body(self) -> dict:
+        if self.headers.get_content_type() != "application/json":
+            raise ApiError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "expected a JSON body")
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 65536:
+            raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request too large")
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "invalid JSON") from None
+        if not isinstance(body, dict):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "expected a JSON object")
+        return body
+
     def _status(self) -> dict:
-        with closing(self.app.connect()) as con:
-            series = [{"id": row["id"], "hostname": row["hostname"], "paths": json.loads(row["paths"])}
-                      for row in con.execute("SELECT * FROM series ORDER BY id")]
-        return {"version": __version__, "repository": self.app.repository_id, "series": series,
+        series = []
+        if self.app.repo is not None:
+            with closing(self.app.connect()) as con:
+                series = [{"id": row["id"], "hostname": row["hostname"], "paths": json.loads(row["paths"])}
+                          for row in con.execute("SELECT * FROM series ORDER BY id")]
+        return {"version": __version__, "ready": self.app.repo is not None, "problem": self.app.problem,
+                "repository": self.app.repo.repository_id if self.app.repo else None, "series": series,
                 "indexing": self.app.indexing, "attribution": ATTRIBUTION, "license": LICENSE,
                 "source": "/source"}
+
+    # -- settings and retention -----------------------------------------------------------
+
+    def _settings(self) -> dict:
+        return {**self.app.cfg.describe(), "ready": self.app.repo is not None, "problem": self.app.problem,
+                "repository_id": self.app.repo.repository_id if self.app.repo else None}
+
+    def _test_settings(self, values: dict) -> dict:
+        """Try settings without saving them: can restic open the repository with them?"""
+        try:
+            candidate = self.app.cfg.with_settings(values)
+            candidate.repository_label()
+            candidate.check_password_source()
+            restic = self.app.restic_factory(candidate.restic_binary, candidate.restic_env)
+            return {"ok": True, "repository_id": restic.repository_id()}
+        except (config.ConfigError, ResticError) as e:
+            return {"ok": False, "error": str(e)}
+
+    def _save_settings(self, values: dict) -> dict:
+        if self.app.indexing["running"]:
+            raise ApiError(HTTPStatus.CONFLICT, "the index is being updated: save again when it is done")
+        try:
+            candidate = self.app.cfg.with_settings(values)
+        except config.ConfigError as e:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        config.save(candidate)
+        self.app.cfg = candidate
+        if self.app.connect_repository() and not self.app.indexing["unavailable"]:
+            self.app.start_indexing()
+        return self._settings()
+
+    def _retention(self) -> dict:
+        policy = self.app.cfg.retention
+        return {"policy": policy, "file": str(self.app.cfg.path),
+                "command": _forget_command(policy) if config.has_rules(policy) else None}
+
+    def _policy(self, body: dict) -> dict:
+        try:
+            policy = config.normalize_policy(body.get("policy") or {})
+        except config.ConfigError as e:
+            raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None
+        if not config.has_rules(policy):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "a policy needs at least one rule")
+        return policy
+
+    def _save_retention(self, body: dict) -> dict:
+        self.app.cfg.retention = self._policy(body)
+        config.save(self.app.cfg)
+        return self._retention()
+
+    def _simulate(self, body: dict) -> dict:
+        """What the policy would keep and remove now: `restic forget --dry-run`, which only
+        reads. Every snapshot with the rules that keep it, oldest first."""
+        policy = self._policy(body)
+        groups = self.app.require_repo().restic.forget_preview(config.forget_args(policy))
+        snapshots = []
+        for group in groups:
+            reasons = {reason["snapshot"]["id"]: reason["matches"] for reason in group.get("reasons") or []}
+            for keep, listed in ((True, group.get("keep")), (False, group.get("remove"))):
+                for snap in listed or []:
+                    snapshots.append({"id": snap["id"], "time": snap["time"], "hostname": snap.get("hostname"),
+                                      "tags": snap.get("tags") or [], "keep": keep,
+                                      "reasons": reasons.get(snap["id"], []) if keep else []})
+        snapshots.sort(key=lambda snap: timestamp_us(snap["time"]))
+        kept = sum(snap["keep"] for snap in snapshots)
+        return {"snapshots": snapshots, "kept": kept, "removed": len(snapshots) - kept,
+                "command": _forget_command(policy)}
 
     def _snapshots(self) -> list[dict]:
         with closing(self.app.connect()) as con:
@@ -267,6 +414,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             snap = query.find_snapshot(con, _required(params, "snapshot"))
             points = query.history(con, snap, path)
         return {"path": path, "points": points}
+
+
+def _forget_command(policy: dict) -> str:
+    words = ["restic", "forget", *config.forget_args(policy), *(["--prune"] if policy.get("prune") else [])]
+    return " ".join(f'"{word}"' if " " in word else word for word in words)
 
 
 def _required(params: dict, name: str) -> str:

@@ -1,27 +1,37 @@
 # restic-machine
 
-Browse the history of a [restic](https://restic.net) repository: a timeline of your
-snapshots and, for any of them, the tree of files as it was then, with sizes and
-modification times.
+A visual interface for [restic](https://restic.net), running on the computer you back up.
+Browse the history of your repository: a timeline of your snapshots and, for any of them,
+the tree of files as it was then, with sizes and modification times. Manage its retention
+policy and see what it would keep before it deletes anything.
 
-> **Status: early development.** Browsing works (timeline, tree, sizes over time);
-> downloading and restoring files comes next.
+> **Status: early development.** Browsing, settings and the retention policy work.
+> Next: restic's commands from the interface, downloading and restoring files, and the
+> backup itself.
 
 In your browser you get:
 
-- **a timeline** of the snapshots, each bar as tall as the number of changes it brought,
-  so an unusual one (thousands of files changed at once) stands out;
-- **the folder tree** as it was in the chosen snapshot, with the size and file count of
-  every folder, and what is new, modified or removed since the previous snapshot;
-- **the size of any file or folder over time**, and the dates on which it changed.
+- **Browse:** a timeline of the snapshots, each bar as tall as the number of changes it
+  brought, so an unusual one (thousands of files changed at once) stands out; the folder
+  tree as it was in the chosen snapshot, with the size and file count of every folder, and
+  what is new, modified or removed since the previous snapshot; the size of any file or
+  folder over time.
+- **Repository:** the retention policy (which snapshots to keep), with a simulation of
+  what it would keep and remove right now, and why.
+- **Settings:** where the repository is and how restic gets its password. When something
+  is missing or wrong, restic-machine opens on this page.
 
 ## How it works
 
-- **It only reads your repository.** restic-machine runs restic's own command line
-  (`restic ... --json`), so it works with every backend restic supports. Every call is
-  read-only and uses `--no-lock`: browsing never writes a lock into the repository and
-  can't make your `forget --prune` fail. If a read happens to collide with a prune, the
-  repository is just reported as temporarily unavailable.
+- **It runs restic's own command line** (`restic ... --json`), so it works with every
+  backend restic supports.
+- **Browsing only reads.** Every read uses `--no-lock`, so it never writes a lock into the
+  repository and can't make a `forget --prune` fail. If a read happens to collide with a
+  prune, the repository is just reported as temporarily unavailable.
+- **Changes are explicit.** restic itself keeps no retention policy: it is whatever
+  `restic forget` is given. restic-machine keeps yours in its config file; the web page
+  shows and simulates it (a dry run), and `restic-machine forget` applies it, typically from
+  your backup job, exactly like `restic forget --keep-… --prune` would.
 - **It keeps a local index** of what each snapshot contains (SQLite). A file that doesn't
   change is stored once for all the snapshots it appears in, so the index grows with what
   changes, not with the number of snapshots. New snapshots are read incrementally.
@@ -39,9 +49,10 @@ In your browser you get:
 
 ## Usage
 
-Configure the repository (see below), then start it from a clone, without installing
-anything: double-click **`restic-machine.pyw`** on Windows, or run **`./restic-machine.sh`**
-on Linux and macOS. It reads any new snapshots in the background and opens your browser.
+Start it from a clone, without installing anything: double-click **`restic-machine.pyw`**
+on Windows, or run **`./restic-machine.sh`** on Linux and macOS. It opens your browser
+(on the Settings page if the repository isn't configured yet) and reads any new snapshots
+in the background.
 Or install it (`pip install .`) and run `restic-machine-app` (or `restic-machine serve` in a
 terminal).
 
@@ -59,16 +70,24 @@ restic-machine index                  # read new snapshots (e.g. right after eac
 restic-machine snapshots              # list them
 restic-machine ls latest /home/me     # a folder as it was in a snapshot
 restic-machine info                   # where the index is and what it holds
+restic-machine forget --dry-run       # what the retention policy would keep and remove
+restic-machine forget                 # apply it (this deletes snapshots: run it from your backup job)
 ```
 
 (From a clone without installing: `PYTHONPATH=src python -m restic_machine ...`.)
 
+### Retention from your backup job
+
+Set the policy in the Repository page, then replace the `restic forget --keep-… --prune`
+line of your backup script with `restic-machine forget`. It uses the same repository
+settings (or `-r REPOSITORY`), prints restic's output and returns restic's exit code.
+
 ## Configuration
 
-restic-machine uses restic's environment variables (`RESTIC_REPOSITORY`,
-`RESTIC_PASSWORD_FILE`, `RESTIC_PASSWORD_COMMAND`, backend credentials...). To keep
-settings in a file instead, copy [`config.example.toml`](config.example.toml) to
-`~/.config/restic-machine/config.toml`.
+Use the Settings page, or restic's environment variables (`RESTIC_REPOSITORY`,
+`RESTIC_PASSWORD_FILE`, `RESTIC_PASSWORD_COMMAND`, backend credentials...), or edit
+`~/.config/restic-machine/config.toml` by hand (see [`config.example.toml`](config.example.toml)).
+restic-machine never stores your password, only where restic finds it.
 
 | What | Default | Override |
 |---|---|---|

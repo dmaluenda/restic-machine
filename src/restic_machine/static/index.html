@@ -7,11 +7,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>restic-machine</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
+  <script type="module" src="/app.js"></script>
 </head>
 <body>
   <header class="topbar">
     <h1>restic-machine</h1>
+    <nav class="tabs" role="tablist" aria-label="Pages">
+      <button id="tab-browse" type="button" role="tab" aria-controls="view-browse">Browse</button>
+      <button id="tab-repository" type="button" role="tab" aria-controls="view-repository">Repository</button>
+      <button id="tab-settings" type="button" role="tab" aria-controls="view-settings">Settings</button>
+    </nav>
     <span id="repo" class="muted"></span>
     <select id="series" aria-label="Backup series" hidden></select>
     <span class="spacer"></span>
@@ -22,45 +27,142 @@
 
   <div id="banner" class="banner" role="status" hidden></div>
 
-  <section class="timeline" aria-label="Snapshots">
-    <div id="bars" class="bars" role="listbox" tabindex="0" aria-label="Snapshots, oldest to newest"></div>
-    <div id="snapshot-info" class="snapshot-info"></div>
-  </section>
-
-  <nav id="crumbs" class="crumbs" aria-label="Folder"></nav>
-
-  <main class="content">
-    <section class="listing">
-      <table id="listing">
-        <thead>
-          <tr>
-            <th data-sort="name" scope="col">Name</th>
-            <th data-sort="size" scope="col" class="num">Size</th>
-            <th data-sort="files" scope="col" class="num">Files</th>
-            <th data-sort="mtime_us" scope="col">Modified</th>
-            <th data-sort="status" scope="col">Change</th>
-            <th scope="col"><span class="visually-hidden">History</span></th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <p id="listing-note" class="muted" hidden></p>
-      <label class="toggle"><input type="checkbox" id="show-removed"> Show what was removed since the previous snapshot <span id="removed-count" class="muted"></span></label>
+  <div id="view-browse" class="view" role="tabpanel" aria-labelledby="tab-browse">
+    <section class="timeline" aria-label="Snapshots">
+      <div id="bars" class="bars" role="listbox" tabindex="0" aria-label="Snapshots, oldest to newest"></div>
+      <div id="snapshot-info" class="snapshot-info"></div>
     </section>
 
-    <aside id="detail" class="detail" hidden>
-      <div class="detail-head">
-        <h2 id="detail-title"></h2>
-        <button id="detail-close" type="button" class="icon" aria-label="Close">&times;</button>
+    <nav id="crumbs" class="crumbs" aria-label="Folder"></nav>
+
+    <main class="content">
+      <section class="listing">
+        <table id="listing">
+          <thead>
+            <tr>
+              <th data-sort="name" scope="col">Name</th>
+              <th data-sort="size" scope="col" class="num">Size</th>
+              <th data-sort="files" scope="col" class="num">Files</th>
+              <th data-sort="mtime_us" scope="col">Modified</th>
+              <th data-sort="status" scope="col">Change</th>
+              <th scope="col"><span class="visually-hidden">History</span></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="listing-note" class="muted" hidden></p>
+        <label class="toggle"><input type="checkbox" id="show-removed"> Show what was removed since the previous snapshot <span id="removed-count" class="muted"></span></label>
+      </section>
+
+      <aside id="detail" class="detail" hidden>
+        <div class="detail-head">
+          <h2 id="detail-title"></h2>
+          <button id="detail-close" type="button" class="icon" aria-label="Close">&times;</button>
+        </div>
+        <p id="detail-path" class="muted path"></p>
+        <div id="chart" class="chart"></div>
+        <table id="versions" class="versions">
+          <thead><tr><th scope="col">From</th><th scope="col">Until</th><th scope="col" class="num">Size</th><th scope="col" class="num">Files</th><th scope="col">Modified</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </aside>
+    </main>
+  </div>
+
+  <div id="view-repository" class="view page" role="tabpanel" aria-labelledby="tab-repository" hidden>
+    <section aria-labelledby="retention-title">
+      <h2 id="retention-title">Retention policy</h2>
+      <p class="hint">restic keeps no policy of its own: it is whatever <code>restic forget</code> is
+        given. restic-machine keeps yours, shows here what it would do (a dry run, which changes
+        nothing), and your backup job applies it by running <code>restic-machine forget</code>.</p>
+      <form id="policy-form" class="form" autocomplete="off">
+        <fieldset>
+          <legend>Keep the most recent snapshot of each…</legend>
+          <div class="rules">
+            <label>Last <span class="hint">snapshots</span><input name="keep_last" type="number" min="0" step="1" inputmode="numeric"></label>
+            <label>Hours<input name="keep_hourly" type="number" min="0" step="1" inputmode="numeric"></label>
+            <label>Days<input name="keep_daily" type="number" min="0" step="1" inputmode="numeric"></label>
+            <label>Weeks<input name="keep_weekly" type="number" min="0" step="1" inputmode="numeric"></label>
+            <label>Months<input name="keep_monthly" type="number" min="0" step="1" inputmode="numeric"></label>
+            <label>Years<input name="keep_yearly" type="number" min="0" step="1" inputmode="numeric"></label>
+          </div>
+          <p class="hint">For example 7 days keeps the last snapshot of each of the last 7 days that have one. Empty means the rule is not used.</p>
+        </fieldset>
+        <label class="wide">Always keep snapshots tagged <input name="keep_tag" spellcheck="false" placeholder="e.g. keep, before-upgrade"></label>
+        <details id="policy-more">
+          <summary>More rules</summary>
+          <div class="rules">
+            <label>All within<input name="keep_within" placeholder="e.g. 14d" spellcheck="false"></label>
+            <label>Hourly within<input name="keep_within_hourly" placeholder="e.g. 2d" spellcheck="false"></label>
+            <label>Daily within<input name="keep_within_daily" placeholder="e.g. 1m" spellcheck="false"></label>
+            <label>Weekly within<input name="keep_within_weekly" placeholder="e.g. 6m" spellcheck="false"></label>
+            <label>Monthly within<input name="keep_within_monthly" placeholder="e.g. 2y" spellcheck="false"></label>
+            <label>Yearly within<input name="keep_within_yearly" placeholder="e.g. 10y" spellcheck="false"></label>
+          </div>
+          <p class="hint">Durations relative to the newest snapshot: y, m, d, h (e.g. 1y6m).</p>
+          <label class="wide">Group snapshots by <input name="group_by" spellcheck="false" placeholder="host,paths (restic's default)"></label>
+        </details>
+        <label class="check"><input type="checkbox" name="prune"> Prune after forgetting: frees the space (without it, the data of forgotten snapshots stays in the repository)</label>
+        <div class="actions">
+          <button type="button" id="policy-simulate">Simulate</button>
+          <button type="submit" class="primary">Save policy</button>
+          <button type="button" id="policy-revert">Undo changes</button>
+          <span id="policy-state" class="muted"></span>
+          <span id="policy-result" role="status"></span>
+        </div>
+        <p class="hint">Saved policy, as a restic command: <code id="policy-command">—</code></p>
+      </form>
+      <div id="simulation" class="simulation" aria-live="polite"></div>
+    </section>
+    <section aria-labelledby="commands-title">
+      <h2 id="commands-title">restic commands</h2>
+      <p class="hint">Coming next: restic's commands from here, the ones that only read apart from the
+        ones that change the repository, and a danger zone (with explicit confirmation) for those that
+        delete data.</p>
+    </section>
+  </div>
+
+  <div id="view-settings" class="view page" role="tabpanel" aria-labelledby="tab-settings" hidden>
+    <h2>Settings</h2>
+    <p id="settings-state" class="callout"></p>
+    <form id="settings-form" class="form" autocomplete="off">
+      <fieldset>
+        <legend>Repository</legend>
+        <label class="wide">Location
+          <input name="repository" spellcheck="false" data-placeholder="e.g. /srv/restic, sftp:user@host:/srv/restic, s3:…">
+        </label>
+        <p class="hint" data-env="repository"></p>
+        <label class="wide">Password file
+          <input name="password_file" spellcheck="false" data-placeholder="the file that holds the repository password">
+        </label>
+        <p class="hint" data-env="password_file"></p>
+        <label class="wide">…or a command that prints the password
+          <input name="password_command" spellcheck="false" data-placeholder="e.g. pass show restic">
+        </label>
+        <p class="hint" data-env="password_command"></p>
+        <p class="hint">restic-machine never stores your password, only where restic finds it.</p>
+        <label class="wide">restic program
+          <input name="restic_binary" spellcheck="false" placeholder="restic (from PATH)">
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Index</legend>
+        <label class="wide">Index folder
+          <input name="data_dir" spellcheck="false">
+        </label>
+        <p class="hint">It lists every file name in your backups: keep it private, and outside what you back up if you can.</p>
+        <label>Keep forgotten snapshots in the index for
+          <span class="inline"><input name="forgotten_retention_days" type="number" min="0" step="1" class="short"> days</span>
+        </label>
+      </fieldset>
+      <div class="actions">
+        <button type="button" id="settings-test">Test connection</button>
+        <button type="submit" class="primary">Save</button>
+        <span id="settings-result" role="status"></span>
       </div>
-      <p id="detail-path" class="muted path"></p>
-      <div id="chart" class="chart"></div>
-      <table id="versions" class="versions">
-        <thead><tr><th scope="col">From</th><th scope="col">Until</th><th scope="col" class="num">Size</th><th scope="col" class="num">Files</th><th scope="col">Modified</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </aside>
-  </main>
+      <p class="hint">Saved in <code id="settings-file"></code><span id="settings-env"></span>.</p>
+    </form>
+  </div>
 
   <footer class="footer">
     <span id="attribution">restic-machine by David Maluenda</span> ·

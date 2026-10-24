@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 David Maluenda
 
-"""Read-only wrapper around the restic command line.
+"""Wrapper around the restic command line: reads, plus applying a retention policy.
 
-Every call adds `--no-lock`. Without it each read would write a lock file into the
+Every read adds `--no-lock`. Without it each read would write a lock file into the
 repository, and a browser left open (or an indexer that died) could make the owner's
 `forget --prune` fail. The price is that a read may fail while a prune is running: that
-is reported as RepositoryUnavailable, i.e. "try again later". Nothing here ever writes.
+is reported as RepositoryUnavailable, i.e. "try again later".
+
+The only call that writes is `forget()`, which applies a retention policy. The web
+interface never calls it (it only simulates, with --dry-run); the `restic-machine forget`
+command does, typically from the backup job.
 """
 
 import json
@@ -46,6 +50,21 @@ class Restic:
 
     def snapshots(self) -> list[dict]:
         return self._run_json("snapshots", "--json") or []
+
+    def forget_preview(self, policy_args: list[str]) -> list[dict]:
+        """What `restic forget` would do with a policy, without doing it: one entry per group
+        of snapshots with `keep`, `remove` and, for each kept one, the rules that keep it."""
+        return self._run_json("forget", "--dry-run", "--json", *policy_args) or []
+
+    def forget(self, policy_args: list[str], prune: bool) -> int:
+        """Apply a retention policy: this one writes to the repository, under restic's own
+        exclusive lock (so without --no-lock). restic's output goes straight through, e.g.
+        to the backup job's log. Returns restic's exit code."""
+        command = [self.binary, "forget", *policy_args, *(["--prune"] if prune else [])]
+        try:
+            return subprocess.run(command, env=self.env, stdin=subprocess.DEVNULL, **_NO_WINDOW).returncode
+        except FileNotFoundError:
+            raise ResticError(f"restic not found: {self.binary}") from None
 
     def ls(self, snapshot_id: str) -> Iterator[dict]:
         """Every node (file, directory, symlink...) of a snapshot."""
