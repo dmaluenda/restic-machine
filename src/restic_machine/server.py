@@ -27,12 +27,13 @@ import traceback
 import zipfile
 from contextlib import closing
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, config, db, query
+from . import __version__, config, db, excludes, query, retention
 from .indexer import IndexBusy, Indexer, timestamp_us
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -43,7 +44,7 @@ _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     **{f"/{name}": (name, "text/javascript; charset=utf-8")
-       for name in ("app.js", "common.js", "repository.js", "settings.js")},
+       for name in ("app.js", "common.js", "retention.js", "settings.js")},
 }
 _CSP = ("default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none';"
         " form-action 'none'; frame-ancestors 'none'")
@@ -80,6 +81,7 @@ class App:
         self.problem: str | None = None  # why there is no repository, for the settings page
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._snapshots_cache = None  # (repo, when, `restic snapshots`)
         self.connect_repository()
 
     def connect_repository(self) -> bool:
@@ -111,6 +113,18 @@ class App:
         if self.repo is None:
             raise NotReady(self.problem or "no repository configured")
         return self.repo
+
+    def live_snapshots(self, max_age: float = 60.0) -> list[dict]:
+        """`restic snapshots`, remembered for a minute: the calendar asks again at every click."""
+        repo = self.require_repo()
+        with self._lock:
+            cached = self._snapshots_cache
+            if cached and cached[0] is repo and time.monotonic() - cached[1] < max_age:
+                return cached[2]
+        snapshots = repo.restic.snapshots()
+        with self._lock:
+            self._snapshots_cache = (repo, time.monotonic(), snapshots)
+        return snapshots
 
     def connect(self):
         return db.connect(self.require_repo().index_path)
@@ -272,6 +286,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._settings())
         elif path == "/api/retention":
             self._send_json(self._retention())
+        elif path == "/api/excludes":
+            self._send_json(self._excludes())
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such page: {path}")
 
@@ -294,6 +310,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._save_retention(self._json_body()))
         elif path == "/api/retention/simulate":
             self._send_json(self._simulate(self._json_body()))
+        elif path == "/api/retention/calendar":
+            self._send_json(self._calendar(self._json_body()))
+        elif path == "/api/excludes":
+            self._send_json(self._exclude(self._json_body()))
+        elif path == "/api/excludes/remove":
+            self._send_json(self._include(self._json_body()))
         else:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no such action: {path}")
 
@@ -389,6 +411,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return {"snapshots": snapshots, "kept": kept, "removed": len(snapshots) - kept,
                 "command": _forget_command(policy)}
 
+    def _calendar(self, body: dict) -> dict:
+        """What the policy would leave on a given day: today's snapshots that exist by then, plus
+        the backups still to come (assumed at the usual times of the last days), judged with
+        restic's rules as copied in retention.py. Each host+paths group on its own, as restic."""
+        policy = self._policy(body)
+        try:
+            day = date.fromisoformat(str(body.get("date") or date.today().isoformat()))
+        except ValueError:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "date must be YYYY-MM-DD") from None
+        if day > date.today() + timedelta(days=3 * 366):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "pick a day within the next three years")
+        groups: dict[tuple, list[retention.Snapshot]] = {}
+        hosts = {}
+        for info in self.app.live_snapshots():
+            key = (info.get("hostname") or "", tuple(sorted(info.get("paths") or [])))
+            snap = retention.Snapshot(datetime.fromisoformat(info["time"]), info["id"], info.get("tags") or [])
+            groups.setdefault(key, []).append(snap)
+            hosts[info["id"]] = key[0]
+        snapshots, schedule = [], set()
+        for real in groups.values():
+            existing = [snap for snap in real if snap.time.date() <= day]
+            future = retention.projected(real, day) if day > date.today() else []  # today means now
+            schedule |= {f"{snap.time:%H:%M}" for snap in future}
+            for snap, keep, reasons in retention.apply(existing + future, policy):
+                snapshots.append({"id": snap.id, "time": snap.time.isoformat(), "projected": snap.id is None,
+                                  "hostname": hosts.get(snap.id), "tags": snap.tags, "keep": keep,
+                                  "reasons": reasons})
+        snapshots.sort(key=lambda snap: timestamp_us(snap["time"]))
+        real_kept = sum(s["keep"] for s in snapshots if not s["projected"])
+        return {"date": day.isoformat(), "today": date.today().isoformat(), "snapshots": snapshots,
+                "real_kept": real_kept, "real_removed": sum(not s["projected"] for s in snapshots) - real_kept,
+                "future_kept": sum(s["keep"] for s in snapshots if s["projected"]),
+                "schedule": sorted(schedule),
+                "grouping_differs": policy.get("group_by", "host,paths") != "host,paths"}
+
     def _snapshots(self) -> list[dict]:
         with closing(self.app.connect()) as con:
             rows = query.snapshots(con)
@@ -405,8 +462,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             previous = query.previous_snapshot(con, snap)
             entries = query.list_dir(con, snap, path, previous)
             removed = query.removed_entries(con, snap, previous, path) if previous is not None else []
+        patterns = excludes.read(self.app.cfg.excludes_file) if self.app.cfg.excludes_file else None
+        for entry in entries:
+            entry["native"] = excludes.native_path(f"{path.rstrip('/')}/{entry['name']}")
+            entry["excluded"] = excludes.excluded_by(entry["native"], patterns) if patterns else None
         return {"snapshot": snap["restic_id"], "previous": previous["restic_id"] if previous else None,
-                "path": path, "entries": entries, "removed": removed}
+                "path": path, "entries": entries, "removed": removed, "excludes": patterns is not None}
+
+    # -- the backup's exclude file ----------------------------------------------------------
+
+    def _excludes_file(self) -> Path:
+        if not self.app.cfg.excludes_file:
+            raise ApiError(HTTPStatus.CONFLICT, "set the backup's exclude file in Settings first")
+        return self.app.cfg.excludes_file
+
+    def _excludes(self) -> dict:
+        file = self.app.cfg.excludes_file
+        return {"file": str(file) if file else None, "exists": bool(file and file.exists()),
+                "patterns": excludes.read(file) if file else []}
+
+    def _exclude(self, body: dict) -> dict:
+        path = excludes.native_path(query.normalize(_required(body, "path")))
+        excludes.add(self._excludes_file(), path)
+        return {"pattern": path, **self._excludes()}
+
+    def _include(self, body: dict) -> dict:
+        removed = excludes.remove(self._excludes_file(), _required(body, "pattern"))
+        return {"removed": removed, **self._excludes()}
 
     def _history(self, params: dict) -> dict:
         path = query.normalize(_required(params, "path"))

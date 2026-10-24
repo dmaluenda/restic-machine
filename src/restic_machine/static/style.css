@@ -228,3 +228,42 @@ code { font-family: var(--mono); font-size: 12px; word-break: break-word; }
 .simulation-table .id { font-family: var(--mono); font-size: 12px; }
 .simulation-table tr.removed td { color: var(--removed); text-decoration: line-through; }
 .simulation-table tr.removed td:last-child { text-decoration: none; }
+
+/* retention calendar */
+.calendar-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.calendar-controls input { padding: 4px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.hint.block { display: block; margin-top: 4px; }
+.calendar { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin: 10px 0; }
+.month { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.month-title { font-weight: 600; margin-bottom: 4px; }
+.month .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.month .weekday { font-size: 10px; color: var(--muted); text-align: center; }
+.month .day {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 34px; padding: 1px; border-radius: 4px; border: 1px solid transparent; background: none;
+  font-size: 11px; line-height: 1.1; color: var(--muted);
+}
+.month .day:disabled { cursor: default; opacity: .6; }
+.month .day .tally { font-size: 9px; font-variant-numeric: tabular-nums; }
+.month .day.kept-all { background: var(--accent-soft); color: var(--text); }
+.month .day.kept-some { background: linear-gradient(135deg, var(--accent-soft) 50%, color-mix(in srgb, var(--removed) 22%, var(--panel)) 50%); color: var(--text); }
+.month .day.kept-none { background: color-mix(in srgb, var(--removed) 22%, var(--panel)); color: var(--text); }
+.month .day.future { border-style: dashed; border-color: var(--muted); }
+.month .day.today { box-shadow: inset 0 0 0 2px var(--accent); }
+.month .day.chosen { box-shadow: inset 0 0 0 2px var(--spike); }
+.month .day.selected { outline: 2px solid var(--text); outline-offset: -1px; }
+.month .day.after { opacity: .35; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; margin-right: 2px; border: 1px solid var(--line); }
+.swatch.kept-all { background: var(--accent-soft); }
+.swatch.kept-some { background: linear-gradient(135deg, var(--accent-soft) 50%, color-mix(in srgb, var(--removed) 22%, var(--panel)) 50%); }
+.swatch.kept-none { background: color-mix(in srgb, var(--removed) 22%, var(--panel)); }
+.swatch.future { border: 1px dashed var(--muted); }
+.calendar-day h3 { font-size: 14px; margin: 10px 0 6px; }
+
+/* excluded from the next backups */
+.badge.excluded { color: var(--muted); margin-left: 6px; border-style: dashed; }
+tr.excluded .name { color: var(--muted); }
+button.history.active { color: var(--removed); }
+button.history:disabled { opacity: .45; cursor: help; }
+.actions-cell { white-space: nowrap; }

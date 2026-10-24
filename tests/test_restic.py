@@ -11,9 +11,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
-from restic_machine import db, query
+from restic_machine import config, db, query, retention
 from restic_machine.indexer import Indexer
 from restic_machine.restic import RepositoryUnavailable, Restic, ResticError
 
@@ -80,6 +81,30 @@ class RealResticTest(unittest.TestCase):
         self.assertGreaterEqual(second["n_modified"], 1)
         # Reading left no lock behind in the repository.
         self.assertEqual(list((self.tmp / "repo" / "locks").iterdir()), [])
+
+    def test_retention_rules_match_restic(self):
+        """The calendar's copy of restic's rules gives restic's own answer, reasons included."""
+        self.put("a.txt", b"x", 1_700_000_000)
+        times = ["2024-12-31 23:30:00", "2025-06-15 12:00:00", "2026-01-01 00:30:00", "2026-03-30 10:00:00",
+                 "2026-09-28 09:00:00", "2026-10-05 09:00:00", "2026-10-19 09:00:00", "2026-10-22 08:00:00",
+                 "2026-10-23 08:00:00", "2026-10-23 09:00:00", "2026-10-24 08:00:00", "2026-10-24 09:00:00"]
+        for when in times:
+            self.backup(when)
+        snapshots = self.restic.snapshots()
+        self.write_to_repo("tag", "--add", "keep", snapshots[1]["id"])
+        snaps = [retention.Snapshot(datetime.fromisoformat(s["time"]), s["id"], s.get("tags") or [])
+                 for s in self.restic.snapshots()]
+        for policy in ({"keep_last": 3, "keep_daily": 4, "keep_weekly": 2, "keep_monthly": 3, "keep_yearly": 9},
+                       {"keep_hourly": 3, "keep_tag": ["keep"]},
+                       {"keep_within": "2d", "keep_monthly": 2},
+                       {"keep_within_daily": "1m", "keep_within_yearly": "5y"}):
+            ours = {s.id: (keep, reasons) for s, keep, reasons in retention.apply(snaps, policy)}
+            theirs = {}
+            for group in self.restic.forget_preview(config.forget_args(policy)):
+                why = {r["snapshot"]["id"]: r["matches"] for r in group.get("reasons") or []}
+                theirs.update({s["id"]: (True, why.get(s["id"], [])) for s in group.get("keep") or []})
+                theirs.update({s["id"]: (False, []) for s in group.get("remove") or []})
+            self.assertEqual(ours, theirs, policy)
 
     def test_errors(self):
         wrong = Restic(RESTIC, {**self.env, "RESTIC_PASSWORD": "wrong"})

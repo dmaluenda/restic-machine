@@ -222,7 +222,7 @@ def cmd_serve(cfg: config.Config, args) -> int:
 def cmd_forget(cfg: config.Config, args) -> int:
     policy = cfg.retention
     if not config.has_rules(policy):
-        raise config.ConfigError(f"no retention policy in {cfg.path}: set one in the web page (Repository)"
+        raise config.ConfigError(f"no retention policy in {cfg.path}: set one in the web page (Retention)"
                                  " or under [retention]")
     cfg.repository_label()
     cfg.check_password_source()

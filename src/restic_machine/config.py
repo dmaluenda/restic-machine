@@ -75,6 +75,7 @@ class Config:
     data_dir: Path = field(default_factory=default_data_dir)
     forgotten_retention_days: int = 30
     retention: dict = field(default_factory=dict)  # see normalize_policy()
+    excludes_file: Path | None = None  # the --exclude-file of the backup job
     source: Path | None = None
 
     def _effective(self, var: str) -> str | None:
@@ -117,6 +118,7 @@ class Config:
             "restic_binary": self.restic_binary,
             "data_dir": str(self.data_dir),
             "forgotten_retention_days": self.forgotten_retention_days,
+            "excludes_file": str(self.excludes_file) if self.excludes_file else "",
             "env_names": sorted(k for k, v in self.restic_env.items()
                                 if v is not None and k not in _RESTIC_KEYS.values()),
         }
@@ -140,6 +142,9 @@ class Config:
         if "data_dir" in values:
             value = str(values["data_dir"] or "").strip()
             new.data_dir = Path(value).expanduser() if value else default_data_dir()
+        if "excludes_file" in values:
+            value = str(values["excludes_file"] or "").strip()
+            new.excludes_file = Path(value).expanduser() if value else None
         if "forgotten_retention_days" in values:
             days = values["forgotten_retention_days"]
             if not isinstance(days, int) or isinstance(days, bool) or days < 0:
@@ -239,6 +244,9 @@ def load(path: Path | None = None) -> Config:
         cfg.forgotten_retention_days = days
     if "retention" in raw:
         cfg.retention = normalize_policy(raw["retention"], f"{path} [retention]")
+    backup = raw.get("backup", {})
+    if backup.get("excludes_file"):
+        cfg.excludes_file = Path(str(backup["excludes_file"])).expanduser()
     return cfg
 
 
@@ -273,6 +281,8 @@ def dump(cfg: Config) -> str:
         index.append(f"forgotten_retention_days = {cfg.forgotten_retention_days}")
     if index:
         lines += ["[index]", *index, ""]
+    if cfg.excludes_file:
+        lines += ["[backup]", f"excludes_file = {_toml(str(cfg.excludes_file))}", ""]
     if cfg.retention:
         lines += ["# Applied by `restic-machine forget` (e.g. from the backup job)", "[retention]",
                   *(f"{key} = {_toml(value)}" for key, value in cfg.retention.items()), ""]

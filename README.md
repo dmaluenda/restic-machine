@@ -15,9 +15,12 @@ In your browser you get:
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
   tree as it was in the chosen snapshot, with the size and file count of every folder, and
   what is new, modified or removed since the previous snapshot; the size of any file or
-  folder over time.
-- **Repository:** the retention policy (which snapshots to keep), with a simulation of
-  what it would keep and remove right now, and why.
+  folder over time; and a button to leave a file or folder out of the next backups (it adds
+  the path to your backup's exclude file).
+- **Retention:** the retention policy (which snapshots to keep), a calendar of what it
+  would leave on any day from today on (with the backups still to come), and a check with
+  restic itself of what it would keep and remove right now, and why.
+- **Repository:** restic's commands (coming next).
 - **Settings:** where the repository is and how restic gets its password. When something
   is missing or wrong, restic-machine opens on this page.
 
@@ -78,7 +81,7 @@ restic-machine forget                 # apply it (this deletes snapshots: run it
 
 ### Retention from your backup job
 
-Set the policy in the Repository page, then replace the `restic forget --keep-… --prune`
+Set the policy in the Retention page, then replace the `restic forget --keep-… --prune`
 line of your backup script with `restic-machine forget`. It uses the same repository
 settings (or `-r REPOSITORY`), prints restic's output and returns restic's exit code.
 

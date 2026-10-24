@@ -26,7 +26,7 @@
 # the index this many days, in case you want to look into what happened.
 # forgotten_retention_days = 30
 
-# The retention policy: which snapshots to keep. The Repository page shows and simulates
+# The retention policy: which snapshots to keep. The Retention page shows and simulates
 # it; `restic-machine forget` applies it (run it from your backup job). Each rule is
 # restic's `--keep-<rule>`; leave out the ones you don't use.
 # [retention]
@@ -40,3 +40,8 @@
 # keep_tag = ["keep"]
 # group_by = "host,paths"
 # prune = true                 # free the space after forgetting (default)
+
+[backup]
+# The exclude file your backup job gives restic (--exclude-file). The Browse page adds the
+# paths you exclude to it, so they are left out from the next backup on.
+# excludes_file = "~/.config/restic/excludes.txt"

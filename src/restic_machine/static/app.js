@@ -3,7 +3,7 @@
 import {
   $, api, count, el, formatDate, formatDay, formatSize, mtimeDate, post, snapshotDate, svg,
 } from "./common.js";
-import * as repository from "./repository.js";
+import * as retention from "./retention.js";
 import * as settings from "./settings.js";
 
 const state = {
@@ -56,9 +56,9 @@ function writeHash(push) {
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
 }
 
-// ---- tabs: Browse, Repository, Settings ------------------------------------------------
+// ---- tabs: Browse, Retention, Repository, Settings ------------------------------------------------
 
-const TABS = ["browse", "repository", "settings"];
+const TABS = ["browse", "retention", "repository", "settings"];
 
 function showTab(tab, push = true) {
   if (!state.status?.ready) tab = "settings";  // nothing else works without a repository
@@ -68,7 +68,7 @@ function showTab(tab, push = true) {
     $(`#tab-${name}`).setAttribute("aria-selected", name === tab ? "true" : "false");
   }
   if (tab === "settings") settings.load();
-  else if (tab === "repository") repository.load();
+  else if (tab === "retention") retention.load();
   writeHash(push);
 }
 
@@ -108,7 +108,7 @@ function renderStatus() {
   const indexing = status.indexing;
   $("#repo").textContent = status.ready ? `repository ${status.repository.slice(0, 8)}` : "not set up yet";
   $("#repo").title = status.repository || "";
-  for (const name of ["browse", "repository"]) $(`#tab-${name}`).disabled = !status.ready;
+  for (const name of ["browse", "retention", "repository"]) $(`#tab-${name}`).disabled = !status.ready;
   $("#reindex").hidden = !status.ready;
   $("#attribution").textContent = status.attribution;
   $("#version").textContent = `v${status.version}`;
@@ -346,11 +346,13 @@ function entryRow(entry, removed) {
   const name = el("button", {
     type: "button", class: "link name",
     onclick: isDir && !removed ? () => navigate(path) : () => openDetail(path),
-  }, el("span", { class: "kind", "aria-hidden": "true" }, kind), entry.name);
+  }, el("span", { class: "kind", "aria-hidden": "true" }, kind), entry.name,
+  entry.excluded ? el("span", { class: "badge excluded", title: `Excluded from the next backups by: ${entry.excluded}` },
+    "excluded") : null);
   const status = removed ? "removed" : entry.status;
   return el("tr", {
-    class: [isDir ? "dir" : "", removed ? "removed" : "", state.detailPath === path ? "selected" : ""]
-      .filter(Boolean).join(" ") || null,
+    class: [isDir ? "dir" : "", removed ? "removed" : "", entry.excluded ? "excluded" : "",
+      state.detailPath === path ? "selected" : ""].filter(Boolean).join(" ") || null,
     "data-path": path,
   },
   el("td", {}, name),
@@ -358,11 +360,58 @@ function entryRow(entry, removed) {
   el("td", { class: "num" }, isDir ? count(entry.files) : ""),
   el("td", {}, formatDate(mtimeDate(entry.mtime_us))),
   el("td", {}, status ? el("span", { class: `badge ${status}` }, STATUS_LABEL[status]) : ""),
-  el("td", {}, el("button", {
+  el("td", { class: "actions-cell" }, el("button", {
     type: "button", class: "history", title: "Size over time", "aria-label": `Size of ${entry.name} over time`,
     onclick: () => openDetail(path),
   }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
-    svg("polyline", { points: "1,13 5,8 8,10 11,4 15,6", fill: "none", stroke: "currentColor", "stroke-width": 1.6 })))));
+    svg("polyline", { points: "1,13 5,8 8,10 11,4 15,6", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }))),
+  removed || !state.dir.excludes ? null : excludeButton(entry)));
+}
+
+// ---- excluding from the next backups ---------------------------------------------------
+
+function excludeButton(entry) {
+  const ownLine = entry.excluded === entry.native;  // a line for exactly this path: it can be taken out
+  if (entry.excluded && !ownLine) {
+    return el("button", { type: "button", class: "history", disabled: true,
+      title: `Excluded by the pattern ${entry.excluded}`, "aria-label": `${entry.name} is excluded by a pattern` },
+    excludeIcon());
+  }
+  return el("button", {
+    type: "button", class: entry.excluded ? "history active" : "history",
+    title: entry.excluded ? "Back up again from the next backup" : "Exclude from the next backups",
+    "aria-label": `${entry.excluded ? "Include" : "Exclude"} ${entry.name}`,
+    onclick: () => (entry.excluded ? includeAgain(entry) : exclude(entry)),
+  }, excludeIcon());
+}
+
+const excludeIcon = () => svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
+  svg("circle", { cx: 8, cy: 8, r: 6, fill: "none", stroke: "currentColor", "stroke-width": 1.6 }),
+  svg("line", { x1: 3.8, y1: 12.2, x2: 12.2, y2: 3.8, stroke: "currentColor", "stroke-width": 1.6 }));
+
+async function exclude(entry) {
+  const what = entry.type === "dir" ? "this folder and everything in it" : "this file";
+  if (!confirm(`Exclude ${what} from the next backups?\n\n${entry.native}\n\n` +
+    "The snapshots already made keep it (taking it out of them is a separate step that rewrites " +
+    "them). The line goes into the exclude file of your backup job.")) return;
+  try {
+    await post("/api/excludes", { path: joinPath(state.dir.path, entry.name) });
+  } catch (error) {
+    showBanner(error.message, true);
+    return;
+  }
+  loadDir(false);
+}
+
+async function includeAgain(entry) {
+  if (!confirm(`Back up this again from the next backup?\n\n${entry.native}`)) return;
+  try {
+    await post("/api/excludes/remove", { pattern: entry.excluded });
+  } catch (error) {
+    showBanner(error.message, true);
+    return;
+  }
+  loadDir(false);
 }
 
 // ---- size over time ------------------------------------------------------------------
@@ -520,7 +569,7 @@ function bind() {
     else if (state.snapshot) loadDir(false);
   });
   settings.init({ ready: becameReady });
-  repository.init();
+  retention.init();
 }
 
 async function init() {

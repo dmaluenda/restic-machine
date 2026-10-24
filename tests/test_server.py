@@ -11,9 +11,10 @@ import threading
 import unittest
 import zipfile
 from contextlib import closing
+from datetime import date, timedelta
 from pathlib import Path
 
-from restic_machine import config, db, server
+from restic_machine import config, db, excludes, server
 from restic_machine.indexer import Indexer
 from test_indexer import FakeRestic, snapshot_id
 
@@ -166,6 +167,28 @@ class ServerTest(Served, unittest.TestCase):
         response, _ = self.request("/api/retention", "POST", cookie=self.cookie, body="keep_last=1",
                                    headers={"X-Restic-Machine": "1", "Content-Type": "text/plain"})
         self.assertEqual(response.status, 415)
+
+    def test_calendar(self):
+        now = self.post_json("/api/retention/calendar", {"policy": {"keep_last": 1}})
+        self.assertEqual((now["real_kept"], now["real_removed"], now["schedule"]), (1, 1, []))
+        ahead = self.post_json("/api/retention/calendar", {"policy": {"keep_last": 1},
+                                                           "date": (date.today() + timedelta(days=2)).isoformat()})
+        self.assertEqual(ahead["real_kept"], 0)  # newer backups to come take the only place
+        self.assertEqual([s["keep"] for s in ahead["snapshots"]][-1], True)
+        self.assertEqual(sum(s["keep"] for s in ahead["snapshots"]), 1)
+        self.post_json("/api/retention/calendar", {"policy": {"keep_last": 1}, "date": "soon"}, status=400)
+
+    def test_excluding_from_the_next_backups(self):
+        response, _ = self.request("/api/excludes", "POST", cookie=self.cookie, body=json.dumps({"path": "/data/a"}),
+                                   headers={"X-Restic-Machine": "1", "Content-Type": "application/json"})
+        self.assertEqual(response.status, 409)  # no exclude file set yet
+        self.app.cfg.excludes_file = self.data / "excludes.txt"
+        self.post_json("/api/excludes", {"path": "/data/a"})
+        listing = self.get_json(f"/api/dir?snapshot={snapshot_id(2)}&path=/data")
+        flags = {e["name"]: e["excluded"] for e in listing["entries"]}
+        self.assertEqual(flags, {"a": excludes.native_path("/data/a"), "c": None})
+        self.post_json("/api/excludes/remove", {"pattern": excludes.native_path("/data/a")})
+        self.assertEqual(self.get_json("/api/excludes")["patterns"], [])
 
     def test_source_code_is_offered(self):
         response, body = self.request("/source", cookie=self.cookie)

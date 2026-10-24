@@ -14,6 +14,7 @@
     <h1>restic-machine</h1>
     <nav class="tabs" role="tablist" aria-label="Pages">
       <button id="tab-browse" type="button" role="tab" aria-controls="view-browse">Browse</button>
+      <button id="tab-retention" type="button" role="tab" aria-controls="view-retention">Retention</button>
       <button id="tab-repository" type="button" role="tab" aria-controls="view-repository">Repository</button>
       <button id="tab-settings" type="button" role="tab" aria-controls="view-settings">Settings</button>
     </nav>
@@ -69,12 +70,12 @@
     </main>
   </div>
 
-  <div id="view-repository" class="view page" role="tabpanel" aria-labelledby="tab-repository" hidden>
+  <div id="view-retention" class="view page" role="tabpanel" aria-labelledby="tab-retention" hidden>
     <section aria-labelledby="retention-title">
       <h2 id="retention-title">Retention policy</h2>
       <p class="hint">restic keeps no policy of its own: it is whatever <code>restic forget</code> is
-        given. restic-machine keeps yours, shows here what it would do (a dry run, which changes
-        nothing), and your backup job applies it by running <code>restic-machine forget</code>.</p>
+        given. restic-machine keeps yours, shows here what it would leave, and your backup job
+        applies it by running <code>restic-machine forget</code>.</p>
       <form id="policy-form" class="form" autocomplete="off">
         <fieldset>
           <legend>Keep the most recent snapshot of each…</legend>
@@ -104,7 +105,6 @@
         </details>
         <label class="check"><input type="checkbox" name="prune"> Prune after forgetting: frees the space (without it, the data of forgotten snapshots stays in the repository)</label>
         <div class="actions">
-          <button type="button" id="policy-simulate">Simulate</button>
           <button type="submit" class="primary">Save policy</button>
           <button type="button" id="policy-revert">Undo changes</button>
           <span id="policy-state" class="muted"></span>
@@ -112,8 +112,45 @@
         </div>
         <p class="hint">Saved policy, as a restic command: <code id="policy-command">—</code></p>
       </form>
+    </section>
+    <section aria-labelledby="calendar-title">
+      <h2 id="calendar-title">Calendar</h2>
+      <p class="hint">What the policy leaves alive on a given day, if it keeps being applied every
+        night and the backups go on at their usual times. Each day shows how many of the
+        snapshots made that day are still kept then.</p>
+      <div class="calendar-controls">
+        <label for="calendar-date">Simulate on</label>
+        <input type="date" id="calendar-date">
+        <button type="button" id="calendar-today">Today</button>
+        <button type="button" data-shift="-1" aria-label="One day earlier">−1 day</button>
+        <button type="button" data-shift="1" aria-label="One day later">+1 day</button>
+        <button type="button" data-shift="7" aria-label="One week later">+1 week</button>
+        <button type="button" data-shift="30" aria-label="One month later">+1 month</button>
+        <button type="button" data-shift="365" aria-label="One year later">+1 year</button>
+      </div>
+      <p id="calendar-summary" class="summary" aria-live="polite"></p>
+      <div id="calendar" class="calendar"></div>
+      <p class="hint legend">
+        <span class="swatch kept-all"></span> all kept
+        <span class="swatch kept-some"></span> some kept
+        <span class="swatch kept-none"></span> none left
+        <span class="swatch future"></span> backups to come
+      </p>
+      <div id="calendar-day" class="calendar-day" aria-live="polite"></div>
+    </section>
+    <section aria-labelledby="check-title">
+      <h2 id="check-title">Check with restic</h2>
+      <p class="hint">The calendar applies restic's rules itself, to look ahead. Ask restic what this
+        policy would keep and remove right now: a dry run, nothing changes.</p>
+      <div class="actions">
+        <button type="button" id="policy-simulate">Check with restic now</button>
+        <span id="check-result" role="status"></span>
+      </div>
       <div id="simulation" class="simulation" aria-live="polite"></div>
     </section>
+  </div>
+
+  <div id="view-repository" class="view page" role="tabpanel" aria-labelledby="tab-repository" hidden>
     <section aria-labelledby="commands-title">
       <h2 id="commands-title">restic commands</h2>
       <p class="hint">Coming next: restic's commands from here, the ones that only read apart from the
@@ -144,6 +181,13 @@
         <label class="wide">restic program
           <input name="restic_binary" spellcheck="false" placeholder="restic (from PATH)">
         </label>
+      </fieldset>
+      <fieldset>
+        <legend>Backup</legend>
+        <label class="wide">Exclude file
+          <input name="excludes_file" spellcheck="false" placeholder="the file your backup job gives restic with --exclude-file">
+        </label>
+        <p class="hint">Browse adds the paths you exclude to this file, so they are left out from the next backup on.</p>
       </fieldset>
       <fieldset>
         <legend>Index</legend>
