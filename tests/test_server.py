@@ -221,6 +221,41 @@ class ServerTest(Served, unittest.TestCase):
         self.assertIn("restic_machine/static/app.js", names)
 
 
+class ExpandChangesTest(Served, unittest.TestCase):
+    """Opening only what changed below a folder: changed inside, new, and removed folders."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data = Path(tmp.name)
+        restic = FakeRestic()
+        restic.add(1, "2026-01-01T10:00:00Z", {"/data/same/s": 1, "/data/edit/sub/e": 1,
+                                               "/data/old/deep/o": 1, "/data/old/x": 1})
+        restic.add(2, "2026-01-02T10:00:00Z", {"/data/same/s": 1, "/data/edit/sub/e": 2,
+                                               "/data/new/inner/n": 1, "/data/new/n2": 1, "/data/new/n3": 1})
+        with closing(db.open_index(self.data, "f" * 64)) as con:
+            Indexer(con, restic).run()
+        cfg = make_config(self.data, RESTIC_REPOSITORY="fake:repo", RESTIC_PASSWORD="test-only")
+        self.start(server.App(cfg, restic_factory=lambda binary, env: restic))
+
+    def test_changed_new_and_removed_folders_open(self):
+        tree = self.get_json(f"/api/tree?snapshot={snapshot_id(2)}&path=/data&depth=1000"
+                             "&changed_only=1&with_removed=1")
+        self.assertEqual(sorted(tree["dirs"]), ["/data", "/data/edit", "/data/edit/sub", "/data/new",
+                                                "/data/new/inner", "/data/old", "/data/old/deep"])
+        self.assertEqual(tree["dirs"]["/data/old"]["entries"], [])
+        self.assertEqual([(e["name"], e["status"]) for e in tree["dirs"]["/data/old"]["removed"]],
+                         [("deep", "removed"), ("x", "removed")])
+        tree = self.get_json(f"/api/tree?snapshot={snapshot_id(2)}&path=/data&depth=1000&changed_only=1")
+        self.assertNotIn("/data/old", tree["dirs"])  # removed folders only when asked
+        tree = self.get_json(f"/api/tree?snapshot={snapshot_id(2)}&path=/data&depth=1000&changed_only=1&limit=5")
+        # /data (3 entries) and /data/edit (1) fit; /data/new (3) would make 7, so it stays closed
+        self.assertEqual(sorted(tree["dirs"]), ["/data", "/data/edit", "/data/edit/sub"])
+        self.assertTrue(tree["truncated"])
+        response, _ = self.request(f"/api/tree?snapshot={snapshot_id(2)}&path=/data/nowhere", cookie=self.cookie)
+        self.assertEqual(response.status, 404)
+
+
 class SetupTest(Served, unittest.TestCase):
     """With no repository configured, the server still runs, for the settings page."""
 

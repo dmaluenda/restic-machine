@@ -319,7 +319,7 @@ function step(offset) {
 
 // ---- the folder tree -------------------------------------------------------------------
 // Folders open in place and are read when first opened; which ones are open is remembered.
-// Right-click a folder for "expand one level", "expand all" and "collapse all".
+// Right-click a folder for "expand one level", "expand changes", "expand all" and "collapse all".
 
 const EXPAND_ALL_LIMIT = 5000;  // entries: "expand all" stops there, a snapshot can hold millions
 const STATUS_ORDER = { added: 0, modified: 1, changed: 2, removed: 3 };
@@ -397,7 +397,7 @@ async function loadTree() {
       if (key !== treeKey()) return false;  // another snapshot was chosen meanwhile
       const next = [];
       for (const path of level) {
-        const dirs = (cache().get(path)?.entries || []).filter((e) => e.type === "dir");
+        const dirs = subfolders(cache().get(path));
         if (state.autoOpen && level.length === 1 && dirs.length === 1) state.expanded.add(joinPath(path, dirs[0].name));
         for (const dir of dirs) {
           const child = joinPath(path, dir.name);
@@ -421,6 +421,16 @@ async function loadTree() {
       showLoading(false);
     }
   }
+}
+
+// Removed entries are listed when comparing, or when asked for; a removed folder opens to what it had.
+const removedShown = () => Boolean(state.compare || state.showRemoved);
+
+// The subfolders of a listed folder that the tree shows.
+function subfolders(listing) {
+  if (!listing) return [];
+  return [...listing.entries.filter((e) => e.status || !state.compare), ...(removedShown() ? listing.removed : [])]
+    .filter((e) => e.type === "dir");
 }
 
 function setNote(text) {
@@ -448,7 +458,7 @@ function sortEntries(entries) {
 
 function renderTree() {
   const rows = [];
-  let removedShown = 0, removedTotal = 0;
+  let removedTotal = 0;
   const walk = (path, depth, parentSize) => {
     const listing = cache().get(path);
     if (!listing) {
@@ -463,9 +473,12 @@ function renderTree() {
       if (entry.type === "dir" && state.expanded.has(child)) walk(child, depth + 1, entry.size);
     }
     removedTotal += listing.removed.length;
-    const removed = state.compare || state.showRemoved ? sortEntries(listing.removed) : [];
-    removedShown += removed.length;
-    for (const entry of removed) rows.push(entryRow(entry, joinPath(path, entry.name), depth, parentSize, true));
+    const removed = removedShown() ? sortEntries(listing.removed) : [];
+    for (const entry of removed) {
+      const child = joinPath(path, entry.name);
+      rows.push(entryRow(entry, child, depth, parentSize, true));
+      if (entry.type === "dir" && state.expanded.has(child)) walk(child, depth + 1, entry.size);
+    }
     if (!entries.length && !removed.length) {
       rows.push(noteRow(depth, state.compare ? "No differences here." : "Empty folder."));
     }
@@ -492,13 +505,13 @@ function noteRow(depth, text) {
 function entryRow(entry, path, depth, parentSize, removed) {
   const isDir = entry.type === "dir";
   const open = isDir && state.expanded.has(path);
-  const toggle = isDir && !removed
+  const toggle = isDir
     ? el("button", { type: "button", class: "twisty", "aria-expanded": open ? "true" : "false",
       "aria-label": `${open ? "Close" : "Open"} ${entry.name}`, onclick: () => toggleFolder(path) }, open ? "▾" : "▸")
     : el("span", { class: "twisty", "aria-hidden": "true" }, entry.type === "symlink" ? "↪" : "");
   const name = el("button", {
     type: "button", class: "link name",
-    onclick: isDir && !removed ? () => toggleFolder(path) : () => openDetail(path),
+    onclick: isDir ? () => toggleFolder(path) : () => openDetail(path),
   }, entry.name,
   entry.excluded ? el("span", { class: "badge excluded", title: `Excluded from the next backups by: ${entry.excluded}` },
     "excluded") : null);
@@ -529,7 +542,7 @@ function entryRow(entry, path, depth, parentSize, removed) {
   }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
     svg("polyline", { points: "1,13 5,8 8,10 11,4 15,6", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }))),
   removed || !state.excludes ? null : excludeButton(entry, path)));
-  if (isDir && !removed) row.addEventListener("contextmenu", (event) => openMenu(event, path));
+  if (isDir) row.addEventListener("contextmenu", (event) => openMenu(event, path));
   return row;
 }
 
@@ -551,7 +564,8 @@ function openMenu(event, path) {
   menu.replaceChildren(
     el("div", { class: "menu-title" }, path.slice(path.lastIndexOf("/") + 1) || "/"),
     item("Expand one level", () => expandOneLevel(path)),
-    item("Expand all", () => expandAll(path)),
+    item("Expand changes", () => expandBelow(path, true)),
+    item("Expand all", () => expandBelow(path, false)),
     item("Collapse all", () => collapseAll(path)),
     el("hr"),
     item("Size over time", () => openDetail(path)));
@@ -576,18 +590,20 @@ async function expandOneLevel(path) {
     setNote(error.message);
     return;
   }
-  for (const dir of (cache().get(path)?.entries || []).filter((e) => e.type === "dir" && (e.status || !state.compare))) {
-    state.expanded.add(joinPath(path, dir.name));
-  }
+  for (const dir of subfolders(cache().get(path))) state.expanded.add(joinPath(path, dir.name));
   loadTree();
 }
 
-// Everything below the folder opens (when comparing, only where something changed).
-async function expandAll(path) {
-  setNote("Opening everything below…");
+// Everything below the folder opens, or with `onlyChanges` only the folders with changes inside,
+// new and removed (when comparing, everything below is that too).
+async function expandBelow(path, onlyChanges) {
+  setNote(onlyChanges ? "Opening what changed below…" : "Opening everything below…");
+  const params = { depth: 1000, limit: EXPAND_ALL_LIMIT };
+  if (onlyChanges || state.compare) params.changed_only = 1;
+  if (removedShown()) params.with_removed = 1;
   let data;
   try {
-    data = await fetchTree(path, { depth: 1000, limit: EXPAND_ALL_LIMIT, ...(state.compare ? { changed_only: 1 } : {}) });
+    data = await fetchTree(path, params);
   } catch (error) {
     setNote(error.message);
     return;
@@ -595,7 +611,7 @@ async function expandAll(path) {
   for (const dir of Object.keys(data.dirs)) state.expanded.add(dir);
   await loadTree();
   if (data.truncated) {
-    setNote(`Stopped after about ${count(EXPAND_ALL_LIMIT)} entries: open the deeper folders one by one.`);
+    setNote(`Opened up to ${count(EXPAND_ALL_LIMIT)} entries: the folders left closed would go past that, open them one by one.`);
   }
 }
 

@@ -118,8 +118,9 @@ def list_dir(con: sqlite3.Connection, snap: sqlite3.Row, path: str = "/",
         " t.files AS total_files, pv.type AS prev_type, pv.size AS prev_size,"
         " pv.mtime_us AS prev_mtime, pt.id AS prev_total_id, pt.size AS prev_total_size,"
         " pt.files AS prev_total_files"
-        " FROM path p"
-        f" JOIN version v ON v.path = p.id AND {_ALIVE.format(t='v', seq='seq')}"
+        " FROM path p"  # the folder's children first (CROSS JOIN keeps that order): left to
+        # itself, the planner may read every version alive in the snapshot instead (0.1 s a folder)
+        f" CROSS JOIN version v ON v.path = p.id AND {_ALIVE.format(t='v', seq='seq')}"
         f" LEFT JOIN dir_total t ON t.path = p.id AND {_ALIVE.format(t='t', seq='seq')}"
         f" LEFT JOIN version pv ON pv.path = p.id AND {_ALIVE.format(t='pv', seq='prev')}"
         f" LEFT JOIN dir_total pt ON pt.path = p.id AND {_ALIVE.format(t='pt', seq='prev')}"
@@ -146,13 +147,17 @@ def list_dir(con: sqlite3.Connection, snap: sqlite3.Row, path: str = "/",
 
 def removed_entries(con: sqlite3.Connection, snap: sqlite3.Row, previous: sqlite3.Row,
                     path: str = "/") -> list[dict]:
-    """What the directory had in `previous` and no longer has in `snap`, as it was then."""
-    args = {"dir": _directory(con, snap, path), "series": snap["series"], "seq": snap["seq"],
-            "prev": previous["seq"]}
+    """What the directory had in `previous` and no longer has in `snap`, as it was then. The
+    directory may be gone from `snap` itself: then that is everything it had."""
+    try:
+        dir_id = _directory(con, snap, path)
+    except LookupError:
+        dir_id = _directory(con, previous, path)
+    args = {"dir": dir_id, "series": snap["series"], "seq": snap["seq"], "prev": previous["seq"]}
     rows = con.execute(
         "SELECT p.name, v.type, v.size, v.mtime_us, t.size AS total_size, t.files AS total_files"
-        " FROM path p"
-        f" JOIN version v ON v.path = p.id AND {_ALIVE.format(t='v', seq='prev')}"
+        " FROM path p"  # children first, as in list_dir
+        f" CROSS JOIN version v ON v.path = p.id AND {_ALIVE.format(t='v', seq='prev')}"
         f" LEFT JOIN dir_total t ON t.path = p.id AND {_ALIVE.format(t='t', seq='prev')}"
         " WHERE p.parent = :dir AND NOT EXISTS (SELECT 1 FROM version x"
         f"  WHERE x.path = p.id AND {_ALIVE.format(t='x', seq='seq')})", args).fetchall()

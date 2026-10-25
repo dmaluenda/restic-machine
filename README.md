@@ -16,7 +16,8 @@ In your browser you get:
 - **Browser:** a timeline of the snapshots, each bar as tall as the number of changes it
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
   tree as it was in the chosen snapshot (open folders in place, right-click one to expand a
-  level, everything below it, or collapse it), with the size and file count of every folder,
+  level, only what changed below it, everything below it, or collapse it; removed folders
+  open too, to what they had), with the size and file count of every folder,
   and what is new, modified or removed since the previous snapshot; Ctrl+click a second
   snapshot to see only what changed between the two, with the change in size (another
   Ctrl+click swaps one of them, so there are always two); the size of

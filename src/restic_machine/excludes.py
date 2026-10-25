@@ -61,24 +61,44 @@ def _matches(pattern: tuple[str, ...], path: tuple[str, ...]) -> bool:
     return bool(path) and fnmatchcase(path[0], pattern[0]) and _matches(pattern[1:], path[1:])
 
 
-def _covers(pattern: str, path: tuple[str, ...]) -> bool:
-    """Does the pattern match the path or one of its parent directories?"""
+@lru_cache(maxsize=1024)
+def _compiled(pattern: str) -> tuple[bool, tuple[str, ...], tuple[bool, ...]]:
+    """(anchored?, components, which components are plain names, without wildcards)."""
     anchored, parts = _components(os.path.expandvars(pattern))
+    return anchored, parts, tuple(not any(c in part for c in "*?[") for part in parts)
+
+
+def _covers(pattern: str, path: tuple[str, ...], names: frozenset[str] = frozenset()) -> bool:
+    """Does the pattern match the path or one of its parent directories? `names`, the path's
+    components as a set, if given, rules most patterns out at once: a plain name of the
+    pattern that the path doesn't have."""
+    anchored, parts, plain = _compiled(pattern)
     if not parts:
         return False
-    if not anchored:
-        parts = ("**", *parts)
-    return any(_matches(parts, path[:end]) for end in range(1, len(path) + 1))
+    if names and any(is_plain and part not in names for part, is_plain in zip(parts, plain)):
+        return False
+    if "**" in parts:  # the general way, slower
+        if not anchored:
+            parts = ("**", *parts)
+        return any(_matches(parts, path[:end]) for end in range(1, len(path) + 1))
+    # Without **, the pattern is k components in a row: at the start if anchored, else anywhere.
+    k = len(parts)
+    if len(path) < k:
+        return False
+    starts = range(1 if anchored else len(path) - k + 1)
+    return any(all(path[i + j] == parts[j] if plain[j] else fnmatchcase(path[i + j], parts[j])
+                   for j in range(k)) for i in starts)
 
 
 def excluded_by(path: str, patterns: list[str]) -> str | None:
     """The pattern that excludes `path` (a native path), or None. The last matching line wins,
     so a later `!pattern` brings it back."""
     _, parts = _components(path)
+    names = frozenset(parts)
     verdict = None
     for line in patterns:
         negated = line.startswith("!")
-        if _covers(line[1:] if negated else line, parts):
+        if _covers(line[1:] if negated else line, parts, names):
             verdict = None if negated else line
     return verdict
 

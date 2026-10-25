@@ -496,10 +496,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return {key: tree[key] for key in ("snapshot", "previous", "path", "excludes")} | listing
 
     def _tree(self, params: dict) -> dict:
-        """A directory and the ones below it, `depth` levels down (breadth first, up to about
-        `limit` entries), as the Browse tree expands them. Changes are against `compare` (any
-        snapshot of the same series) or else the previous one; with `changed_only`, only the
-        directories with changes below them are opened."""
+        """A directory and the ones below it, `depth` levels down (breadth first, up to `limit`
+        entries: a directory that alone would go past it stays closed; when comparing, only what
+        differs is listed), as the Browse tree expands them. Changes are against `compare` (any snapshot of the same series) or else the
+        previous one; with `changed_only`, only the directories with changes below them are
+        opened, and with `with_removed` the removed ones too (which are then shown). A removed
+        directory lists what it had, all of it removed."""
         path = query.normalize(params.get("path", "/"))
         try:
             depth = max(1, int(params.get("depth", 1)))
@@ -507,11 +509,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             raise ApiError(HTTPStatus.BAD_REQUEST, "depth and limit must be numbers") from None
         changed_only = params.get("changed_only") in ("1", "true")
+        with_removed = params.get("with_removed") in ("1", "true")
+        comparing = bool(params.get("compare"))
         patterns = excludes.read(self.app.cfg.excludes_file) if self.app.cfg.excludes_file else None
-        dirs, queue, rows = {}, [(path, 1)], 0
+        dirs, queue, rows, skipped = {}, [(path, 1)], 0, False
         with closing(self._connect_for_reading()) as con:
             snap = query.find_snapshot(con, _required(params, "snapshot"))
-            if params.get("compare"):
+            if comparing:
                 previous = query.find_snapshot(con, params["compare"])
                 if previous["series"] != snap["series"]:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "only snapshots of the same host and paths can be compared")
@@ -519,18 +523,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 previous = query.previous_snapshot(con, snap)
             while queue and rows < limit:
                 current, level = queue.pop(0)
-                entries = query.list_dir(con, snap, current, previous)
+                try:
+                    entries = query.list_dir(con, snap, current, previous)
+                except LookupError:
+                    if previous is None:
+                        raise
+                    entries = []  # gone since `previous` (else the next line says it isn't there)
+                if comparing:
+                    entries = [e for e in entries if e["status"]]  # only what differs is shown
                 removed = query.removed_entries(con, snap, previous, current) if previous is not None else []
+                shown = len(entries) + (len(removed) if with_removed or comparing else 0)
+                if dirs and rows + shown > limit:
+                    skipped = True  # left closed: it alone would go past the limit
+                    continue
                 for entry in entries:
                     entry["native"] = excludes.native_path(f"{current.rstrip('/')}/{entry['name']}")
                     entry["excluded"] = excludes.excluded_by(entry["native"], patterns) if patterns else None
                 dirs[current] = {"entries": entries, "removed": removed}
-                rows += len(entries) + len(removed)
+                rows += shown
                 if level < depth:
-                    queue += [(f"{current.rstrip('/')}/{e['name']}", level + 1) for e in entries
+                    queue += [(f"{current.rstrip('/')}/{e['name']}", level + 1)
+                              for e in entries + (removed if with_removed else [])
                               if e["type"] == "dir" and (e["status"] or not changed_only)]
         return {"snapshot": snap["restic_id"], "previous": previous["restic_id"] if previous else None,
-                "path": path, "dirs": dirs, "truncated": bool(queue), "excludes": patterns is not None}
+                "path": path, "dirs": dirs, "truncated": bool(queue) or skipped, "excludes": patterns is not None}
 
     # -- the backup's exclude file ----------------------------------------------------------
 
