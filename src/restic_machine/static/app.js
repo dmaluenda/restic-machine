@@ -282,8 +282,7 @@ async function pick(id) {
   state.lastPick = id;
   markBars();
   writeHash(true);
-  await loadTree();
-  if (state.detailPath) await openDetail(state.detailPath);
+  if (await loadTree() && state.detailPath) await openDetail(state.detailPath);
 }
 
 function renderPickHint() {
@@ -308,8 +307,7 @@ async function select(id, push) {
   markBars();
   $("#bars .selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   writeHash(push);
-  await loadTree();
-  if (state.detailPath) await openDetail(state.detailPath);
+  if (await loadTree() && state.detailPath) await openDetail(state.detailPath);
 }
 
 function step(offset) {
@@ -355,31 +353,48 @@ function restoreExpanded() {
   }
 }
 
-async function fetchTree(path, extra = {}) {
+async function fetchTree(path, extra = {}, signal = undefined) {
+  const key = treeKey();
   const params = { snapshot: state.snapshot, path, depth: 1, ...extra };
   if (state.compare) params.compare = state.compare;
-  const data = await api("/api/tree", params);
-  if (data.snapshot !== state.snapshot) return data;
+  const data = await api("/api/tree", params, { signal });
+  if (treeKey() !== key) return data;  // another snapshot (or pair) was chosen meanwhile
   for (const [dir, listing] of Object.entries(data.dirs)) cache().set(dir, listing);
   state.excludes = data.excludes;
   state.previous = data.previous;
   return data;
 }
 
+// Each load aborts the one still running: a newer click wins, and the server stops the old one.
+let loading = null;  // the AbortController of the load in progress
+
+function showLoading(on) {
+  $("#loading").hidden = !on;
+  $("#listing").classList.toggle("loading", on);
+}
+
 // Read what the tree shows: the root, then each open folder whose parent is open and has it.
+// True once it is on screen; false if it failed or a newer load took over.
 async function loadTree() {
+  loading?.abort();
+  const controller = new AbortController();
+  loading = controller;
   const key = treeKey();
   if (!state.expanded) {
     state.expanded = restoreExpanded();
     state.autoOpen = !state.expanded;  // first visit: open folders that are alone in their parent
     state.expanded ??= new Set();
   }
+  if (state.cacheKey !== key) state.previous = null;  // known again once read
+  renderSnapshotInfo();  // what is being read, with the spinner next to it
+  showLoading(true);
   setNote("");
   try {
     let level = ["/"];
     while (level.length) {
-      await Promise.all(level.filter((path) => !cache().has(path)).map((path) => fetchTree(path)));
-      if (key !== treeKey()) return;  // another snapshot was chosen meanwhile
+      await Promise.all(level.filter((path) => !cache().has(path))
+        .map((path) => fetchTree(path, {}, controller.signal)));
+      if (key !== treeKey()) return false;  // another snapshot was chosen meanwhile
       const next = [];
       for (const path of level) {
         const dirs = (cache().get(path)?.entries || []).filter((e) => e.type === "dir");
@@ -391,15 +406,21 @@ async function loadTree() {
       }
       level = next;
     }
+    state.autoOpen = false;
+    saveExpanded();
+    writeHash(false);
+    renderSnapshotInfo();
+    renderTree();
+    return true;
   } catch (error) {
-    setNote(error.message);
-    return;
+    if (!controller.signal.aborted) setNote(error.message);
+    return false;
+  } finally {
+    if (loading === controller) {
+      loading = null;
+      showLoading(false);
+    }
   }
-  state.autoOpen = false;
-  saveExpanded();
-  writeHash(false);
-  renderSnapshotInfo();
-  renderTree();
 }
 
 function setNote(text) {
@@ -635,7 +656,12 @@ async function includeAgain(entry) {
 
 // ---- size over time ------------------------------------------------------------------
 
+let detailLoading = null;  // the AbortController of the history being read
+
 async function openDetail(path) {
+  detailLoading?.abort();
+  const controller = new AbortController();
+  detailLoading = controller;
   state.detailPath = path;
   for (const row of document.querySelectorAll("#listing tbody tr")) {
     row.classList.toggle("selected", row.dataset.path === path);
@@ -648,8 +674,9 @@ async function openDetail(path) {
   $("#detail-path").textContent = path;
   let data;
   try {
-    data = await api("/api/history", { snapshot: state.snapshot, path });
+    data = await api("/api/history", { snapshot: state.snapshot, path }, { signal: controller.signal });
   } catch (error) {
+    if (controller.signal.aborted) return;  // a newer one was asked for
     $("#chart").textContent = error.message;
     $("#versions tbody").replaceChildren();
     return;

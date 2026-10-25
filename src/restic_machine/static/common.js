@@ -4,10 +4,11 @@
 
 export const $ = (selector, root = document) => root.querySelector(selector);
 
-export async function api(path, params = {}) {
+// `signal` (an AbortController's) lets a newer request cancel this one; the server stops too.
+export async function api(path, params = {}, { signal } = {}) {
   const url = new URL(path, location.origin);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  const response = await fetch(url, { credentials: "same-origin" });
+  const response = await fetch(url, { credentials: "same-origin", signal });
   const data = await response.json().catch(() => ({ error: response.statusText }));
   if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { status: response.status });
   return data;

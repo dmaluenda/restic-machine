@@ -124,7 +124,18 @@ a { color: var(--accent); }
   position: absolute; top: -17px; left: 0; white-space: nowrap;
   font-size: 11px; color: var(--muted); pointer-events: none;
 }
+.info-row { display: flex; align-items: center; gap: 10px; }
 .snapshot-info { display: flex; gap: 16px; flex-wrap: wrap; padding: 8px 0 2px; min-height: 28px; }
+/* while a click is being read: a spinner, and the tree dimmed (both only after 0.2 s, so quick reads don't flicker) */
+.spinner {
+  display: inline-block; flex: none; width: 16px; height: 16px; margin-top: 6px; border-radius: 50%;
+  border: 2px solid var(--accent-soft); border-top-color: var(--accent);
+  animation: spin .8s linear infinite, appear .1s ease .2s both;
+}
+.spinner[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+#listing.loading { opacity: .5; transition: opacity .1s ease .2s; }
 .snapshot-info strong { font-weight: 600; }
 .snapshot-info .id { font-family: var(--mono); font-size: 12px; }
 

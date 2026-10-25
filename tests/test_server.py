@@ -6,13 +6,16 @@
 import http.client
 import io
 import json
+import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
+from unittest import mock
 
 from restic_machine import config, db, excludes, server
 from restic_machine.indexer import Indexer
@@ -130,6 +133,26 @@ class ServerTest(Served, unittest.TestCase):
         response, body = self.request(f"/api/dir?snapshot={snapshot_id(2)}&path=/nowhere", cookie=self.cookie)
         self.assertEqual(response.status, 404)
         self.assertIn("not in the index", json.loads(body)["error"])
+
+    def test_a_read_the_browser_gives_up_on_stops(self):
+        stopped = threading.Event()
+
+        def endless_list_dir(con, *args):
+            try:
+                con.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n)"
+                            " SELECT count(*) FROM n").fetchone()
+            except sqlite3.OperationalError:
+                stopped.set()
+                raise
+
+        with mock.patch.object(server.query, "list_dir", endless_list_dir):
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+            conn.request("GET", f"/api/tree?snapshot={snapshot_id(2)}&path=/data",
+                         headers={"Host": f"127.0.0.1:{self.port}", "Cookie": self.cookie})
+            time.sleep(0.3)
+            conn.close()  # as the browser does when a newer click aborts the request
+            self.assertTrue(stopped.wait(10), "the query went on after the browser hung up")
+        self.assertTrue(self.get_json("/api/status")["ready"])
 
     def test_stop_button(self):
         response, _ = self.request("/api/stop", "POST", cookie=self.cookie, headers={"X-Restic-Machine": "1"})

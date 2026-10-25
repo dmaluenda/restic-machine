@@ -21,6 +21,8 @@ import io
 import json
 import os
 import secrets
+import select
+import socket
 import subprocess
 import threading
 import time
@@ -214,8 +216,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except LookupError as e:
             self._send_error(url.path, e.args[0] if e.args else str(e), HTTPStatus.NOT_FOUND)
         except Exception as e:
+            if self._client_gone():
+                return  # stopped because the browser gave up on it: nobody to answer
             traceback.print_exc()
             self._send_error(url.path, f"internal error: {e}", HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _client_gone(self) -> bool:
+        """Has the browser hung up? It does when it aborts a request (a newer click on the
+        timeline): the connection then reads as closed, while a pending request reads nothing."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return True
+
+    def _connect_for_reading(self):
+        """The index, for a read the browser may give up on: then its queries stop."""
+        con = self.app.connect()
+        con.set_progress_handler(self._client_gone, 100_000)  # a true return interrupts the query
+        return con
 
     def _own_hosts(self) -> set[str]:
         port = self.server.server_address[1]
@@ -490,7 +509,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         changed_only = params.get("changed_only") in ("1", "true")
         patterns = excludes.read(self.app.cfg.excludes_file) if self.app.cfg.excludes_file else None
         dirs, queue, rows = {}, [(path, 1)], 0
-        with closing(self.app.connect()) as con:
+        with closing(self._connect_for_reading()) as con:
             snap = query.find_snapshot(con, _required(params, "snapshot"))
             if params.get("compare"):
                 previous = query.find_snapshot(con, params["compare"])
@@ -575,7 +594,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _history(self, params: dict) -> dict:
         path = query.normalize(_required(params, "path"))
-        with closing(self.app.connect()) as con:
+        with closing(self._connect_for_reading()) as con:
             snap = query.find_snapshot(con, _required(params, "snapshot"))
             points = query.history(con, snap, path)
         return {"path": path, "points": points}
