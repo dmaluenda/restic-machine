@@ -12,13 +12,13 @@
 <body>
   <header class="topbar">
     <div class="topbar-start">
-      <h1>restic-machine</h1>
+      <h1><button id="tab-machine" class="brand" type="button" role="tab" aria-controls="view-machine"
+        title="The repository, its password, the exclude file and the index">restic-machine</button></h1>
       <nav class="tabs" role="tablist" aria-label="Pages">
         <button id="tab-browse" type="button" role="tab" aria-controls="view-browse">Browser</button>
         <button id="tab-scheduler" type="button" role="tab" aria-controls="view-scheduler">Scheduler</button>
         <button id="tab-retention" type="button" role="tab" aria-controls="view-retention">Retention</button>
         <button id="tab-cli" type="button" role="tab" aria-controls="view-cli">restic-CLI</button>
-        <button id="tab-settings" type="button" role="tab" aria-controls="view-settings">Settings</button>
       </nav>
     </div>
     <div class="topbar-center">
@@ -100,8 +100,8 @@
           <label class="wide">Folders to back up, one per line
             <textarea name="sources" rows="2" spellcheck="false"></textarea>
           </label>
-          <p class="hint">Left out: what the exclude file lists (<code id="backup-excludes"></code>; set it in
-            Settings, Browse adds to it).</p>
+          <p class="hint">Left out: what the exclude file lists (<code id="backup-excludes"></code>; set it by
+            clicking restic-machine, top left; Browse adds to it).</p>
           <label class="check"><input type="checkbox" name="use_fs_snapshot"> Use a VSS snapshot (Windows): files in use are backed up as they were at one moment</label>
         </fieldset>
         <fieldset>
@@ -215,8 +215,8 @@
     </section>
   </div>
 
-  <div id="view-settings" class="view page" role="tabpanel" aria-labelledby="tab-settings" hidden>
-    <h2>Settings</h2>
+  <div id="view-machine" class="view page" role="tabpanel" aria-labelledby="tab-machine" hidden>
+    <h2>restic-machine</h2>
     <p id="settings-state" class="callout"></p>
     <form id="settings-form" class="form" autocomplete="off">
       <fieldset>

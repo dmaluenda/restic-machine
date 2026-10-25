@@ -5,11 +5,14 @@ Browse the history of your repository: a timeline of your snapshots and, for any
 the tree of files as it was then, with sizes and modification times. Manage its retention
 policy and see what it would keep before it deletes anything. Schedule the backups.
 
-> **Status: early development.** Browsing, scheduled backups, settings and the retention
+> **Status: early development.** Browsing, scheduled backups, setup and the retention
 > policy work. Next: restic's commands from the interface, and downloading and restoring files.
 
 In your browser you get:
 
+- **restic-machine** (the name itself, top left): where the repository is, how restic gets
+  its password, the exclude file and the index. When something is missing or wrong,
+  restic-machine opens on this page.
 - **Browser:** a timeline of the snapshots, each bar as tall as the number of changes it
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
   tree as it was in the chosen snapshot (open folders in place, right-click one to expand a
@@ -24,8 +27,6 @@ In your browser you get:
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.
 - **restic-CLI:** restic's commands (coming next).
-- **Settings:** where the repository is and how restic gets its password. When something
-  is missing or wrong, restic-machine opens on this page.
 
 ## How it works
 
@@ -62,7 +63,7 @@ restic-machine drives restic; it doesn't replace it. restic is a single program 
 - **Windows:** download `restic_<version>_windows_amd64.zip` from
   [restic's releases](https://github.com/restic/restic/releases), unzip it and put
   `restic.exe` in a folder of your choice (for instance `C:\Tools\restic\`). Either add that
-  folder to your `PATH` or give its full path in Settings → *restic program*. (`winget install
+  folder to your `PATH` or give its full path in restic-machine (click its name) → *restic program*. (`winget install
   restic.restic` and `scoop install restic` work too.)
 - **Linux:** your distribution's package (`apt install restic`, `dnf install restic`…) if it
   is recent enough (`restic version`), otherwise the release binary as above.
@@ -100,7 +101,7 @@ password), and put that password in its file.
 
 ### 3. Point restic-machine at it
 
-Start restic-machine (below). With no repository configured it opens on **Settings**: give the
+Start restic-machine (below). With no repository configured it opens on its setup page: give the
 repository, the password file, and press *Test connection*, then *Save*. Then:
 
 - **Scheduler:** the folders to back up, when (every N hours between two times, plus fixed times),
@@ -114,7 +115,7 @@ repository, the password file, and press *Test connection*, then *Save*. Then:
 
 Start it from a clone, without installing anything: double-click **`restic-machine.pyw`**
 on Windows, or run **`./restic-machine.sh`** on Linux and macOS. It opens your browser
-(on the Settings page if the repository isn't configured yet) and reads any new snapshots
+(on the setup page if the repository isn't configured yet) and reads any new snapshots
 in the background.
 Or install it (`pip install .`) and run `restic-machine-app` (or `restic-machine serve` in a
 terminal).
@@ -149,7 +150,7 @@ then lives in restic-machine and its pages show and simulate it. Both use restic
 
 ## Configuration
 
-Use the Settings page, or restic's environment variables (`RESTIC_REPOSITORY`,
+Click restic-machine (top left of its page), or use restic's environment variables (`RESTIC_REPOSITORY`,
 `RESTIC_PASSWORD_FILE`, `RESTIC_PASSWORD_COMMAND`, backend credentials...), or edit
 `~/.config/restic-machine/config.toml` by hand (see [`config.example.toml`](config.example.toml)).
 restic-machine never stores your password, only where restic finds it.

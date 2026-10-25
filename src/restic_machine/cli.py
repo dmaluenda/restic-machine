@@ -211,9 +211,9 @@ def cmd_serve(cfg: config.Config, args) -> int:
         return 0
 
     idle_timeout = args.idle_timeout * 60 if args.idle_timeout else None
-    app = server.App(cfg, idle_timeout)  # with no usable repository, it opens on the settings page
+    app = server.App(cfg, idle_timeout)  # with no usable repository, it opens on the setup page
     if app.problem:
-        _err(f"not ready yet ({app.problem}): see the settings page")
+        _err(f"not ready yet ({app.problem}): set it up in the page that opens")
     httpd = server.make_server(app, args.port)
     url = server.url_of(httpd.server_address[1], app.token)
     server.write_runtime(runtime, httpd.server_address[1], app.token)

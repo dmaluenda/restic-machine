@@ -314,7 +314,7 @@ def _toml_key(key: str) -> str:
 
 def dump(cfg: Config) -> str:
     """The config file for `cfg`, with only what differs from the defaults."""
-    lines = ["# restic-machine configuration. Written by restic-machine (its Settings page);",
+    lines = ["# restic-machine configuration. Written by restic-machine (its web page);",
              "# you may edit it by hand too. See config.example.toml for every setting.", ""]
     if cfg.name:
         lines += ["[repository]", f"name = {_toml(cfg.name)}", ""]

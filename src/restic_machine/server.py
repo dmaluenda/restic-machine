@@ -556,7 +556,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _excludes_file(self) -> Path:
         if not self.app.cfg.excludes_file:
-            raise ApiError(HTTPStatus.CONFLICT, "set the backup's exclude file in Settings first")
+            raise ApiError(HTTPStatus.CONFLICT, "set the backup's exclude file first (click restic-machine, top left)")
         return self.app.cfg.excludes_file
 
     def _excludes(self) -> dict:

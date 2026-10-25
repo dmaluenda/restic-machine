@@ -53,7 +53,7 @@ function showBanner(message, warning = false) {
 
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  const tab = { repository: "cli" }[params.get("tab")] || params.get("tab") || "browse";
+  const tab = { repository: "cli", settings: "machine" }[params.get("tab")] || params.get("tab") || "browse";
   return { tab, snapshot: params.get("snapshot"), compare: params.get("compare") };
 }
 
@@ -64,18 +64,18 @@ function writeHash(push) {
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
 }
 
-// ---- tabs: Browser, Scheduler, Retention, restic-CLI, Settings ------------------------------------------------
+// ---- tabs: Browser, Scheduler, Retention, restic-CLI, and the name itself (repository, index…) ------------------
 
-const TABS = ["browse", "scheduler", "retention", "cli", "settings"];
+const TABS = ["browse", "scheduler", "retention", "cli", "machine"];
 
 function showTab(tab, push = true) {
-  if (!state.status?.ready) tab = "settings";  // nothing else works without a repository
+  if (!state.status?.ready) tab = "machine";  // nothing else works without a repository
   state.tab = tab;
   for (const name of TABS) {
     $(`#view-${name}`).hidden = name !== tab;
     $(`#tab-${name}`).setAttribute("aria-selected", name === tab ? "true" : "false");
   }
-  if (tab === "settings") settings.load();
+  if (tab === "machine") settings.load();
   else if (tab === "scheduler") backups.load();
   else if (tab === "retention") retention.load();
   writeHash(push);
@@ -121,7 +121,7 @@ function renderStatus() {
       : [el("span", { class: "muted" }, `repository ${short}`)]));
   document.title = status.name ? `${status.name} · restic-machine` : "restic-machine";
   $("#repo").title = status.repository || "";
-  for (const name of TABS.filter((tab) => tab !== "settings")) $(`#tab-${name}`).disabled = !status.ready;
+  for (const name of TABS.filter((tab) => tab !== "machine")) $(`#tab-${name}`).disabled = !status.ready;
   $("#reindex").hidden = !status.ready;
   $("#attribution").textContent = status.attribution;
   $("#version").textContent = `v${status.version}`;
@@ -423,12 +423,15 @@ function setNote(text) {
   $("#listing-note").textContent = text;
 }
 
+// By name: folders, then hidden folders (.name), then files, then hidden files; each group in order.
+const nameGroup = (e) => (e.type === "dir" ? 0 : 2) + (e.name.startsWith(".") ? 1 : 0);
+
 function sortEntries(entries) {
   const { key, asc } = state.sort;
   const value = (e) => (key === "status" ? STATUS_ORDER[e.status] ?? 9
     : key === "delta" ? (e.size ?? 0) - (e.prev_size ?? 0) : e[key]);
   return [...entries].sort((a, b) => {
-    if (key === "name" && (a.type === "dir") !== (b.type === "dir")) return a.type === "dir" ? -1 : 1;
+    if (key === "name" && nameGroup(a) !== nameGroup(b)) return nameGroup(a) - nameGroup(b);
     const va = value(a), vb = value(b);
     let order = 0;
     if (va == null || vb == null) order = va == null ? (vb == null ? 0 : 1) : -1;

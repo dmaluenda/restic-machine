@@ -93,6 +93,9 @@ a { color: var(--accent); }
   .topbar-center { grid-column: 1 / -1; grid-row: 2; }
 }
 .topbar h1 { font-size: 16px; margin: 0; }
+.brand { font: inherit; color: var(--text); border: none; background: none; border-radius: 6px; padding: 5px 8px; margin-left: -8px; cursor: pointer; }
+.brand:hover { background: var(--hover); }
+.brand[aria-selected="true"] { background: var(--accent-soft); }
 #repo { font-weight: 500; }
 
 .banner { padding: 8px 16px; background: var(--accent-soft); border-bottom: 1px solid var(--line); }

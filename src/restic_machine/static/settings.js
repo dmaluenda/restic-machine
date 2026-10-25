@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 David Maluenda
-// The Settings page: where the repository is, how restic gets its password, where the index lives.
+// The restic-machine page (its name, top left): where the repository is, how restic gets its
+// password, where the index lives.
 
 import { $, api, post } from "./common.js";
 
@@ -74,7 +75,7 @@ async function save() {
   try {
     const data = await post("/api/settings", values());
     fill(data);
-    result(data.ready ? "Saved." : "Saved, but the repository can't be opened with these settings.", !data.ready);
+    result(data.ready ? "Saved." : "Saved, but the repository can't be opened like this.", !data.ready);
     if (data.ready) onReady();
   } catch (error) {
     result(error.message, true);
