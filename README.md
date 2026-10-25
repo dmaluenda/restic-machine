@@ -17,8 +17,9 @@ In your browser you get:
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
   tree as it was in the chosen snapshot (open folders in place, right-click one to expand a
   level, everything below it, or collapse it), with the size and file count of every folder,
-  and what is new, modified or removed since the previous snapshot; Ctrl+click two snapshots
-  and Compare to see only what changed between them, with the change in size; the size of
+  and what is new, modified or removed since the previous snapshot; Ctrl+click a second
+  snapshot to see only what changed between the two, with the change in size (another
+  Ctrl+click swaps one of them, so there are always two); the size of
   any file or folder over time; and a button to leave a file or folder out of the next
   backups (it adds the path to your backup's exclude file).
 - **Scheduler:** what is backed up and when; restic-machine makes it a scheduled task of the

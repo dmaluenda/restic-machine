@@ -14,7 +14,7 @@ const state = {
   series: null,
   snapshot: null,         // restic id of the snapshot on screen
   compare: null,          // restic id of the older snapshot it is compared with, if any
-  picked: new Set(),      // snapshots picked on the timeline (Ctrl+click) to compare
+  lastPick: null,         // the snapshot clicked last: a Ctrl+click keeps it, and drops the other
   previous: null,         // what the changes shown are measured against
   expanded: null,         // open folders (a Set of paths), remembered between visits
   cache: null,            // path -> {entries, removed} for the snapshot (and comparison) on screen
@@ -197,9 +197,9 @@ function renderTimeline() {
     const gap = previous && date - previous > 36 * 3600 * 1000;
     const spike = changed != null && changed >= 1000 && rates[i] > 10 * Math.max(medianRate, 1);
     x += gap ? 24 : 14;
+    const chosen = s.id === state.snapshot || s.id === state.compare;
     const classes = ["snap", s.indexed ? "" : "pending", spike ? "spike" : "", gap ? "gap" : "",
-      s.id === state.snapshot ? "selected" : "",
-      state.picked.has(s.id) || s.id === state.compare ? "picked" : ""].filter(Boolean).join(" ");
+      chosen ? "selected" : ""].filter(Boolean).join(" ");
     const lines = [`${formatDate(date)} · ${s.id.slice(0, 8)}`];
     if (!s.indexed) lines.push("not indexed yet");
     else lines.push(`${formatSize(s.size)} in ${count(s.files)} files`,
@@ -208,9 +208,9 @@ function renderTimeline() {
 
     const button = el("button", {
       type: "button", class: classes, role: "option", title: lines.join("\n"),
-      "aria-selected": s.id === state.snapshot ? "true" : "false", "data-id": s.id,
+      "aria-selected": chosen ? "true" : "false", "data-id": s.id,
       onclick: (event) => s.indexed && (event.ctrlKey || event.metaKey || event.shiftKey
-        ? togglePick(s.id) : select(s.id, true)),
+        ? pick(s.id) : select(s.id, true)),
     }, el("span", { class: "bar" }));
     const height = !s.indexed ? 6 : changed == null ? 100 : 6 + 94 * Math.log1p(changed) / Math.log1p(max);
     button.firstChild.style.height = `${height}%`;
@@ -246,8 +246,7 @@ function renderSnapshotInfo() {
       el("span", {}, formatDate(snapshotDate(s)), " ", el("span", { class: "id" }, s.id.slice(0, 8))),
       el("span", {}, `${sizeDelta >= 0 ? "+" : "−"}${formatSize(Math.abs(sizeDelta))}, `,
         `${filesDelta >= 0 ? "+" : "−"}${count(Math.abs(filesDelta))} files`),
-      el("span", { class: "muted" }, "only what differs is shown"),
-      el("button", { type: "button", onclick: stopCompare }, "Stop comparing"));
+      el("span", { class: "muted" }, "only what differs is shown"));
     return;
   }
   const previous = state.previous && state.snapshots.find((p) => p.id === state.previous);
@@ -264,63 +263,48 @@ function renderSnapshotInfo() {
   info.replaceChildren(...parts);
 }
 
-// ---- picking snapshots to compare (Ctrl+click on the timeline) ----------------------------
+// ---- choosing snapshots: a click shows one, a Ctrl+click adds a second and compares them ------
+// Another Ctrl+click keeps the snapshot clicked last and drops the other, so there are always two.
 
-function togglePick(id) {
-  if (state.picked.has(id)) state.picked.delete(id);
-  else state.picked.add(id);
-  markBars();
-  renderPickBar();
-}
-
-function renderPickBar() {
-  const bar = $("#pick-bar");
-  const n = state.picked.size;
-  bar.replaceChildren(n === 0
-    ? el("span", { class: "hint" }, "Ctrl+click two snapshots to compare them.")
-    : el("span", {}, `${n} snapshot${n > 1 ? "s" : ""} picked`,
-      el("button", { type: "button", class: "primary", disabled: n !== 2, onclick: startCompare,
-        title: n === 2 ? "Show what changed from the older one to the newer one" : "Pick exactly two" }, "Compare"),
-      el("button", { type: "button", onclick: () => {
-        state.picked.clear();
-        markBars();
-        renderPickBar();
-      } }, "Clear")));
-}
-
-function markBars() {
-  for (const bar of $("#bars").children) {
-    const id = bar.dataset.id;
-    bar.classList.toggle("selected", id === state.snapshot);
-    bar.setAttribute("aria-selected", id === state.snapshot ? "true" : "false");
-    bar.classList.toggle("picked", state.picked.has(id) || id === state.compare);
+async function pick(id) {
+  const chosen = [state.snapshot, state.compare].filter(Boolean);
+  if (!chosen.length) return select(id, true);
+  if (chosen.includes(id)) {
+    state.lastPick = id;  // the one to keep on the next Ctrl+click
+    return;
   }
-}
-
-async function startCompare() {
-  const [older, newer] = [...state.picked]
-    .map((id) => state.snapshots.find((s) => s.id === id))
+  const kept = state.compare && chosen.includes(state.lastPick) ? state.lastPick : state.snapshot;
+  const [older, newer] = [kept, id]
+    .map((pickId) => state.snapshots.find((s) => s.id === pickId))
     .sort((a, b) => snapshotDate(a) - snapshotDate(b));
-  state.picked.clear();
   state.compare = older.id;
   state.snapshot = newer.id;
+  state.lastPick = id;
   markBars();
-  renderPickBar();
   writeHash(true);
   await loadTree();
   if (state.detailPath) await openDetail(state.detailPath);
 }
 
-function stopCompare() {
-  state.compare = null;
-  markBars();
-  writeHash(true);
-  loadTree();
+function renderPickHint() {
+  $("#pick-bar").replaceChildren(el("span", { class: "hint" }, state.compare
+    ? "Ctrl+click another snapshot to compare it with the one you picked last; click one to see it alone."
+    : "Ctrl+click a second snapshot to compare the two."));
+}
+
+function markBars() {
+  for (const bar of $("#bars").children) {
+    const chosen = bar.dataset.id === state.snapshot || bar.dataset.id === state.compare;
+    bar.classList.toggle("selected", chosen);
+    bar.setAttribute("aria-selected", chosen ? "true" : "false");
+  }
+  renderPickHint();
 }
 
 async function select(id, push) {
   state.snapshot = id;
   state.compare = null;
+  state.lastPick = id;
   markBars();
   $("#bars .selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   writeHash(push);
@@ -770,7 +754,7 @@ function bind() {
     state.series = Number(event.target.value);
     state.snapshot = null;
     state.compare = null;
-    state.picked.clear();
+    state.lastPick = null;
     closeDetail();
     loadSnapshots();
   });
@@ -823,7 +807,7 @@ async function init() {
   state.tab = tab;  // before loading, so the address keeps the tab meanwhile
   state.snapshot = snapshot;
   state.compare = compare;
-  renderPickBar();
+  renderPickHint();
   await refreshStatus();
   if (state.status?.ready && !state.snapshots.length) await loadSnapshots();
   showTab(state.tab, false);  // the tab may have changed meanwhile (back button)
