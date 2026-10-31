@@ -3,6 +3,7 @@
 
 """A copy of the repository (a mirror of its files), checked with a real restic (when there is one)."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -12,9 +13,10 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
-from restic_machine import config, copies, db
+from restic_machine import config, copies, db, server
 from restic_machine.indexer import Indexer
 from restic_machine.restic import Restic
+from test_server import Served, restic_path
 
 RESTIC = os.environ.get("RESTIC_MACHINE_TEST_RESTIC") or shutil.which("restic")
 
@@ -71,6 +73,29 @@ class CheckTest(unittest.TestCase):
         log = (self.tmp / "data" / "check.log").read_text(encoding="utf-8")
         self.assertIn("2 snapshots on mirror", log)
         self.assertIn(" OK (", log)
+
+    def test_a_file_forgotten_here_is_restored_from_the_copy(self):
+        self.backup("one")
+        first = json.loads(self.restic("snapshots", "--json"))[0]
+        self.backup("two")
+        shutil.copytree(self.tmp / "repo", self.tmp / "mirror")
+        self.backup("three")
+        cfg = self.config(self.tmp / "mirror")
+        app = server.App(cfg)  # the real restic, on the repository and on its copy
+        app.start_indexing()  # as each backup does
+        app.wait_for_indexing()
+        self.restic("forget", "--keep-last", "1", "--prune")  # "one" is now only on the mirror
+        app.start_indexing()
+        app.wait_for_indexing()
+        self.assertEqual(copies.check(cfg, "mirror"), 0)
+        served = Served()
+        served.addCleanup, served.assertEqual = self.addCleanup, self.assertEqual
+        served.start(app)
+        target = served.post_json("/api/restore", {"snapshot": first["id"], "path": restic_path(self.tmp / "src" / "a.txt")})
+        self.assertEqual(Path(target["target"]).read_text(), "one")
+        shutil.rmtree(self.tmp / "mirror")  # unplugged
+        refused = served.post_json("/api/restore", {"snapshot": first["id"], "path": restic_path(self.tmp / "src" / "a.txt")}, status=409)
+        self.assertIn("not there now", refused["error"])
 
     def test_what_it_answers_when_it_cannot(self):
         self.backup("one")

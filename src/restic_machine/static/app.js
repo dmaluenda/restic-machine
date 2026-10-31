@@ -130,8 +130,8 @@ async function changeSource(source) {
   writeHash(true);
 }
 
-// Whether restic can read a snapshot's files: only the live repository's, so far.
-const readable = (id) => state.snapshots.find((s) => s.id === id)?.live !== false;
+// Whether the live repository has a snapshot (else its files are read from a copy that holds it).
+const inRepository = (id) => state.snapshots.find((s) => s.id === id)?.live !== false;
 const elsewhere = (s) => `only on ${s.copies.join(", ")} now`;
 
 // ---- status and indexing -------------------------------------------------------------
@@ -313,7 +313,7 @@ function renderSnapshotInfo() {
   if (s.tags.length) parts.push(el("span", { class: "muted" }, `tags: ${s.tags.join(", ")}`));
   if (!s.live) {
     parts.push(el("span", { class: "badge elsewhere", title: "Forgotten in the repository: browsed from the index; " +
-      "its files can't be restored or compared until restic-machine can read the copy" }, elsewhere(s)));
+      "its files are restored and compared from the copy, when it can be reached" }, elsewhere(s)));
   }
   info.replaceChildren(...parts);
 }
@@ -705,11 +705,11 @@ function compareButton(entry, path, snapshot) {
 }
 
 function restoreButton(entry, path, snapshot) {
-  const can = readable(snapshot);
+  const live = inRepository(snapshot);
   return el("button", {
-    type: "button", class: "history", disabled: !can,
-    title: can ? "Restore it as it was in this snapshot (next to the file, with the date in its name)"
-      : "This snapshot is only on a copy now: restoring from a copy comes next",
+    type: "button", class: "history",
+    title: "Restore it as it was in this snapshot (next to the file, with the date in its name)" +
+      (live ? "" : ": read from the copy that holds it, which must be reachable now"),
     "aria-label": `Restore ${entry.name}`, onclick: () => restoreFile(entry, path, snapshot),
   }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
     svg("path", { d: "M3.5 6.5 A5 5 0 1 1 3 9.5", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }),

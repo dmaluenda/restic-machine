@@ -28,7 +28,7 @@ import threading
 import time
 import traceback
 import zipfile
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
@@ -137,13 +137,15 @@ class App:
     def connect(self):
         return db.connect(self.require_repo().index_path)
 
-    def snapshot_text(self, snap, path: str, info: dict) -> list[str]:
-        """A text file as it was in a snapshot, remembered for the next comparisons."""
+    def snapshot_text(self, snap, path: str, info: dict, reader) -> list[str]:
+        """A text file as it was in a snapshot, remembered for the next comparisons. `reader()`
+        gives the restic to read it with (a context manager), only when it isn't remembered."""
         key = (snap["restic_id"], path)
         with self._lock:
             if key in self._texts:
                 return self._texts[key]
-        lines = files.snapshot_text(self.require_repo().restic, snap, path, info)
+        with reader() as restic:
+            lines = files.snapshot_text(restic, snap, path, info)
         with self._lock:
             self._texts[key] = lines
             while len(self._texts) > 16:
@@ -560,12 +562,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise ApiError(HTTPStatus.NOT_FOUND, f"no copy called {source}")
         return holds[source]
 
-    @staticmethod
-    def _require_live(snap) -> None:
-        """Reading a file's content goes through restic, which only has what wasn't forgotten."""
-        if snap["forgotten_at"] is not None:
-            raise files.FileError(f"snapshot {snap['restic_id'][:8]} is only on a copy of the repository now,"
-                                  " and restic-machine can't read copies yet")
+    @contextmanager
+    def _reader(self, snap):
+        """The restic to read a snapshot's files with: the live repository's while it has the
+        snapshot, else that of a copy that holds it (logged into for the read, see copies.reached)."""
+        if snap["forgotten_at"] is None:
+            yield self.app.require_repo().restic
+            return
+        holds = self._copies_hold()
+        holders = [c for c in self.app.cfg.copies if holds[c["name"]](snap)]
+        reachable = [c for c in holders if c["location"]]
+        if not reachable:
+            where = ", ".join(c["name"] for c in holders) or "no copy"
+            raise files.FileError(f"snapshot {snap['restic_id'][:8]} is only on {where} now, with no location set to read it")
+        problems = []
+        for copy in reachable:
+            try:
+                with copies.reached(self.app.cfg, copy) as restic:
+                    location = restic.env["RESTIC_REPOSITORY"]
+                    if copies._on_a_filesystem(location) and not Path(location, "config").exists():
+                        raise copies.CopyError(f"{copy['name']} is not there now (unplugged?)")
+                    yield restic
+                    return
+            except copies.CopyError as e:
+                problems.append(str(e))
+        raise files.FileError(f"snapshot {snap['restic_id'][:8]} is only on a copy now, which can't be read: "
+                              + "; ".join(problems))
 
     def _dir(self, params: dict) -> dict:
         """One directory (the tree's first level); see _tree."""
@@ -701,8 +723,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with closing(self.app.connect()) as con:
             snap = query.find_snapshot(con, _required(body, "snapshot"))
             info = query.entry(con, snap, path)
-        self._require_live(snap)
-        return {"target": str(files.restore(self.app.require_repo().restic, snap, path, info))}
+        with self._reader(snap) as restic:
+            return {"target": str(files.restore(restic, snap, path, info))}
 
     def _diff(self, params: dict) -> dict:
         """Two versions of a text file side by side: `left` and `right` are each a snapshot id
@@ -722,8 +744,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except LookupError:
                     sides[side] = None  # not in that snapshot
                     continue
-            self._require_live(snap)
-            sides[side] = self.app.snapshot_text(snap, path, info)
+            sides[side] = self.app.snapshot_text(snap, path, info, lambda snap=snap: self._reader(snap))
         rows, changes = files.side_by_side(sides["left"] or [], sides["right"] or [])
         return {"path": path, "native": native, "rows": rows, "changes": changes,
                 "missing": {side: lines is None for side, lines in sides.items()}}

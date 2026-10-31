@@ -296,7 +296,7 @@ class CopiesTest(Served, unittest.TestCase):
         response, _ = self.request(f"/api/tree?snapshot={snapshot_id(2)}&path=/data&source=nowhere", cookie=self.cookie)
         self.assertEqual(response.status, 404)
         refused = self.post_json("/api/restore", {"snapshot": snapshot_id(1), "path": "/data/a"}, status=409)
-        self.assertIn("only on a copy", refused["error"])
+        self.assertIn("only on disk now, with no location set", refused["error"])
 
     def test_what_a_copy_was_seen_holding_wins(self):
         copies._remember(self.app.cfg, "f" * 64, "undated", seen_at="2026-01-06T09:00:00",
