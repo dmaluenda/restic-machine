@@ -5,7 +5,7 @@ Browse the history of your repository: a timeline of your snapshots and, for any
 the tree of files as it was then, with sizes and modification times. Manage its retention
 policy and see what it would keep before it deletes anything. Schedule the backups.
 
-> **Status: early development.** Browsing (also copies of the repository), restoring and
+> **Status: beta (0.1.0b1).** Browsing (also copies of the repository), restoring and
 > comparing files, scheduled backups, setup and the retention policy work.
 
 In your browser you get:
