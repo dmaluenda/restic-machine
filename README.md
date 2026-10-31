@@ -8,12 +8,6 @@ policy and see what it would keep before it deletes anything. Schedule the backu
 > **Status: beta (0.1.0b1).** Browsing (also copies of the repository), restoring and
 > comparing files, scheduled backups, setup and the retention policy work.
 
-![Browse: the timeline of snapshots, the folder tree of the chosen one, and the size of a folder over time](docs/browser.png)
-
-![Retention: the policy, and a calendar of what it would leave](docs/retention.png)
-
-<sub>Made-up data. Hatched bars are snapshots forgotten in the repository but still on a copy of it.</sub>
-
 In your browser you get:
 
 - **restic-machine** (the name itself, top left): where the repository is, how restic gets
@@ -37,12 +31,19 @@ In your browser you get:
   is overwritten); for text files, a window to compare any two of its versions, or one with
   the file on disk now, line by line; and a button to leave a file or folder out of the next
   backups (it adds the path to your backup's exclude file).
+
+  ![Browse: the timeline of snapshots, the folder tree of the chosen one, and the size of a folder over time](docs/browser.png)
+  <sub>Made-up data. Hatched bars are snapshots forgotten in the repository but still on a copy of it.</sub>
+
+
 - **Scheduler:** what is backed up and when; restic-machine makes it a scheduled task of the
   system that runs the backups on its own, and after each backup reads the new snapshot into
   its index, so the page has it at once.
 - **Retention:** the retention policy (which snapshots to keep), a calendar of what it
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.
+
+  ![Retention: the policy, and a calendar of what it would leave](docs/retention.png)
 
 ## How it works
 
