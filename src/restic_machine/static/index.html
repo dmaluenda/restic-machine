@@ -23,6 +23,8 @@
     </div>
     <div class="topbar-center">
       <span id="repo"></span>
+      <select id="source" aria-label="What to browse: the repository, or a copy of it" hidden></select>
+      <span id="browse-only" class="badge" title="A copy of the repository is only browsed: no backups, retention or changes" hidden>browse only</span>
       <select id="series" aria-label="Backup series" hidden></select>
     </div>
     <div class="topbar-end">
@@ -283,6 +285,15 @@
         </label>
         <p class="hint">Where the Browser opens: the folders down to it open, and the side panel shows it. As restic
           names it (<code>/C/Users/me</code>); <code>C:\Users\me</code> works too.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Copies of this repository</legend>
+        <p class="hint">Other places that hold this same repository: a mirror of its files, on a disk kept
+          offline say. They are only browsed, never written to: pick one next to the name, top centre. A copy
+          holds what the repository held when it was made, so the index already knows its snapshots, even those
+          forgotten here since: give the time of the last copy. Reading its files (to restore) comes next.</p>
+        <div id="copies-list" class="copies-list"></div>
+        <button type="button" id="copies-add">Add a copy</button>
       </fieldset>
       <fieldset>
         <legend>Index</legend>

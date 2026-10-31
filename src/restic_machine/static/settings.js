@@ -3,7 +3,7 @@
 // The restic-machine page (its name, top left): where the repository is, how restic gets its
 // password, where the index lives.
 
-import { $, api, post } from "./common.js";
+import { $, api, el, post } from "./common.js";
 
 const FIELDS = ["name", "repository", "password_file", "password_command", "restic_binary", "data_dir",
   "forgotten_retention_days", "excludes_file", "initial_path"];
@@ -20,6 +20,7 @@ export function init(options) {
     save();
   });
   $("#settings-test").addEventListener("click", test);
+  $("#copies-add").addEventListener("click", () => $("#copies-list").append(copyRow()));
 }
 
 export async function load() {
@@ -40,6 +41,7 @@ function fill(data) {
     $(`[data-env="${name}"]`).textContent = fromEnv && !data[name]
       ? `Empty here, so restic uses the ${variable} environment variable: ${fromEnv}` : "";
   }
+  fillCopies(data.copies || []);
   $("#settings-file").textContent = data.file + (data.file_exists ? "" : " (not created yet)");
   $("#settings-env").textContent = data.env_names.length
     ? `; it also gives restic ${data.env_names.join(", ")} (values not shown)` : "";
@@ -57,7 +59,27 @@ function values() {
   const out = {};
   for (const name of FIELDS) out[name] = fields[name].value.trim();
   out.forgotten_retention_days = out.forgotten_retention_days === "" ? 30 : Number(out.forgotten_retention_days);
+  out.copies = [...$("#copies-list").children].map((row) => ({
+    name: row.querySelector("[data-key=name]").value.trim(),
+    location: row.querySelector("[data-key=location]").value.trim(),
+    copied_at: row.querySelector("[data-key=copied_at]").value,
+  })).filter((c) => c.name || c.location || c.copied_at);
   return out;
+}
+
+// Copies of the repository: one row each (name, where restic finds it, when it was last copied).
+function copyRow(copy = {}) {
+  const input = (key, attrs) => el("input", { "data-key": key, spellcheck: "false", value: copy[key] || "", ...attrs });
+  const row = el("div", { class: "copy-row" },
+    el("label", {}, "Name", input("name", { placeholder: "e.g. offline-disk", maxlength: 40 })),
+    el("label", { class: "grow" }, "Location", input("location", { placeholder: "where restic opens it (can wait)" })),
+    el("label", {}, "Last copied", input("copied_at", { type: "datetime-local" })),
+    el("button", { type: "button", class: "icon", "aria-label": "Remove this copy", onclick: () => row.remove() }, "×"));
+  return row;
+}
+
+function fillCopies(copies) {
+  $("#copies-list").replaceChildren(...copies.map(copyRow));
 }
 
 async function test() {

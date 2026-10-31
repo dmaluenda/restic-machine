@@ -19,6 +19,7 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "restic-machine"
@@ -79,6 +80,7 @@ class Config:
     backup: dict = field(default_factory=lambda: normalize_backup({}))  # see normalize_backup()
     name: str = ""  # what the user calls the repository (shown with its id)
     initial_path: str = "/"  # where Browse opens, as restic names it (see browse_path)
+    copies: list = field(default_factory=list)  # copies of this same repository; see normalize_copies()
     source: Path | None = None
 
     def _effective(self, var: str) -> str | None:
@@ -124,6 +126,7 @@ class Config:
             "excludes_file": str(self.excludes_file) if self.excludes_file else "",
             "name": self.name,
             "initial_path": self.initial_path,
+            "copies": self.copies,
             "env_names": sorted(k for k, v in self.restic_env.items()
                                 if v is not None and k not in _RESTIC_KEYS.values()),
         }
@@ -151,6 +154,8 @@ class Config:
             new.name = str(values["name"] or "").strip()
         if "initial_path" in values:
             new.initial_path = browse_path(values["initial_path"])
+        if "copies" in values:
+            new.copies = normalize_copies(values["copies"])
         if "excludes_file" in values:
             value = str(values["excludes_file"] or "").strip()
             new.excludes_file = Path(value).expanduser() if value else None
@@ -169,6 +174,34 @@ def browse_path(text) -> str:
     if re.match(r"[A-Za-z]:(/|$)", text):
         text = f"/{text[0]}{text[2:]}"
     return "/" + "/".join(part for part in text.split("/") if part)
+
+
+def normalize_copies(raw, where: str = "copies") -> list[dict]:
+    """Check the copies of the repository: other places that hold this same repository (a
+    mirror of its files, e.g. on a disk kept offline), browsed but never written to. Each has
+    a `name`, the `location` restic opens it at (may be empty until it can be reached), and
+    `copied_at`, the local time of the last copy ("YYYY-MM-DDTHH:MM"), which tells what it
+    holds while it can't be read."""
+    if not isinstance(raw, list):
+        raise ConfigError(f"{where}: expected a list of copies")
+    copies, names = [], set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ConfigError(f"{where}: each copy is a table with name, location and copied_at")
+        name = str(item.get("name") or "").strip()
+        if not re.fullmatch(r"[\w .-]{1,40}", name) or name.lower() == "live":
+            raise ConfigError(f"{where}: a copy needs a short name of letters, digits, spaces, . _ or - (not \"live\")")
+        if name.lower() in names:
+            raise ConfigError(f"{where}: two copies called {name}")
+        names.add(name.lower())
+        copied_at = str(item.get("copied_at") or "").strip()
+        if copied_at:
+            try:
+                copied_at = datetime.fromisoformat(copied_at).strftime("%Y-%m-%dT%H:%M")
+            except ValueError:
+                raise ConfigError(f"{where}: {name}: copied_at is a date and time like 2026-10-24T12:14") from None
+        copies.append({"name": name, "location": str(item.get("location") or "").strip(), "copied_at": copied_at})
+    return copies
 
 
 def normalize_policy(raw: dict, where: str = "retention policy") -> dict:
@@ -310,6 +343,7 @@ def load(path: Path | None = None) -> Config:
         cfg.retention = normalize_policy(raw["retention"], f"{path} [retention]")
     cfg.name = str(raw.get("repository", {}).get("name", "")).strip()
     cfg.initial_path = browse_path(raw.get("browse", {}).get("initial_path", ""))
+    cfg.copies = normalize_copies(raw.get("copies", []), f"{path} [[copies]]")
     backup = raw.get("backup", {})
     cfg.backup = normalize_backup(backup, f"{path} [backup]")
     if backup.get("excludes_file"):
@@ -352,6 +386,9 @@ def dump(cfg: Config) -> str:
         lines += ["[index]", *index, ""]
     if cfg.initial_path != "/":
         lines += ["[browse]", f"initial_path = {_toml(cfg.initial_path)}", ""]
+    for item in cfg.copies:
+        lines += ["# A copy of this repository (browsed, never written to)", "[[copies]]",
+                  *(f"{key} = {_toml(item[key])}" for key in ("name", "location", "copied_at") if item[key]), ""]
     backup, default = cfg.backup, normalize_backup({})
     plain = [f"{key} = {_toml(backup[key])}" for key in ("sources", "use_fs_snapshot", "lock_name")
              if backup[key] != default[key]]

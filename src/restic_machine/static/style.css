@@ -121,6 +121,16 @@ a { color: var(--accent); }
 .snap:hover { background: var(--hover); }
 .snap .bar { width: 100%; min-height: 3px; background: var(--bar); border-radius: 2px 2px 0 0; }
 .snap.pending .bar { background: var(--bar-pending); }
+/* forgotten in the repository, still on a copy: hatched */
+.snap.elsewhere .bar { background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 4px); }
+.snap.elsewhere.selected .bar { background: repeating-linear-gradient(135deg, var(--accent) 0 2px, transparent 2px 4px); }
+.badge.elsewhere { color: var(--muted); border-style: dashed; }
+#browse-only { color: var(--modified); }
+.copies-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.copy-row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.copy-row label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; }
+.copy-row label.grow { flex: 1; min-width: 14em; }
+#browse-only[hidden], #source[hidden] { display: none; }
 .snap.spike .bar { background: var(--spike); }
 .snap.selected { background: var(--accent-soft); }
 .snap.selected .bar { background: var(--accent); }

@@ -10,6 +10,7 @@ for a directory, `size` and `files` are the totals of everything below it.
 import re
 import sqlite3
 from bisect import bisect_right
+from datetime import datetime, timezone
 
 from .db import DIR, NODE_TYPES
 
@@ -58,11 +59,34 @@ def find_snapshot(con: sqlite3.Connection, ref: str) -> sqlite3.Row:
     return rows[0]
 
 
-def previous_snapshot(con: sqlite3.Connection, snap: sqlite3.Row) -> sqlite3.Row | None:
-    """The visible snapshot before `snap` in its series: what its changes are measured against."""
-    return con.execute(
-        "SELECT * FROM snapshot WHERE series = ? AND seq < ? AND forgotten_at IS NULL"
-        " ORDER BY seq DESC LIMIT 1", (snap["series"], snap["seq"])).fetchone()
+def previous_snapshot(con: sqlite3.Connection, snap: sqlite3.Row, shown=None) -> sqlite3.Row | None:
+    """The visible snapshot before `snap` in its series: what its changes are measured against.
+    `shown` (a test on snapshot rows) says which are visible; by default, those restic still has."""
+    if shown is None:
+        return con.execute(
+            "SELECT * FROM snapshot WHERE series = ? AND seq < ? AND forgotten_at IS NULL"
+            " ORDER BY seq DESC LIMIT 1", (snap["series"], snap["seq"])).fetchone()
+    rows = con.execute("SELECT * FROM snapshot WHERE series = ? AND seq < ? ORDER BY seq DESC",
+                       (snap["series"], snap["seq"]))
+    return next((row for row in rows if shown(row)), None)
+
+
+# -- copies of the repository ---------------------------------------------------------------
+# A copy (a mirror of the repository's files, say on a disk kept offline) holds what the
+# repository held when it was made: the snapshots made before then and not yet forgotten.
+
+def copy_cutoff(copied_at: str) -> tuple[int, str]:
+    """A copy's time, local "YYYY-MM-DDTHH:MM", as the index compares it: (time_us, and the
+    UTC text that forgotten_at is written in)."""
+    moment = datetime.fromisoformat(copied_at).astimezone()
+    return int(moment.timestamp() * 1_000_000), moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def on_copy(row: sqlite3.Row, cutoff: tuple[int, str]) -> bool:
+    """Does a copy made at `cutoff` hold this (indexed) snapshot?"""
+    time_us, utc = cutoff
+    return (row["seq"] is not None and row["replaced_by"] is None and row["time_us"] <= time_us
+            and (row["forgotten_at"] is None or row["forgotten_at"] > utc))
 
 
 def normalize(path: str) -> str:
@@ -181,9 +205,10 @@ def entry(con: sqlite3.Connection, snap: sqlite3.Row, path: str) -> dict:
     return {"type": NODE_TYPES[row["type"]], "size": row["size"], "mtime_us": row["mtime_us"]}
 
 
-def history(con: sqlite3.Connection, snap: sqlite3.Row, path: str) -> list[dict]:
-    """A path across the visible snapshots of `snap`'s series: one point per snapshot with
-    whether it existed and its size (directories: totals below it) and mtime."""
+def history(con: sqlite3.Connection, snap: sqlite3.Row, path: str, shown=None) -> list[dict]:
+    """A path across the visible snapshots of `snap`'s series (`shown`: as previous_snapshot):
+    one point per snapshot with whether it existed and its size (directories: totals below it)
+    and mtime."""
     path_id = resolve_path(con, path)
     key = {"path": path_id, "series": snap["series"]}
     versions = con.execute(
@@ -193,8 +218,8 @@ def history(con: sqlite3.Connection, snap: sqlite3.Row, path: str) -> list[dict]
         "SELECT size, files, first_seq, last_seq FROM dir_total"
         " WHERE path = :path AND series = :series ORDER BY first_seq", key).fetchall()
     snaps = con.execute(
-        "SELECT restic_id, time, seq FROM snapshot WHERE series = ? AND seq IS NOT NULL"
-        " AND forgotten_at IS NULL ORDER BY seq", (snap["series"],)).fetchall()
+        "SELECT * FROM snapshot WHERE series = ? AND seq IS NOT NULL ORDER BY seq", (snap["series"],)).fetchall()
+    snaps = [s for s in snaps if (shown(s) if shown else s["forgotten_at"] is None)]
 
     def alive_at(rows):
         firsts = [row["first_seq"] for row in rows]
@@ -207,8 +232,8 @@ def history(con: sqlite3.Connection, snap: sqlite3.Row, path: str) -> list[dict]
     version_at, total_at = alive_at(versions), alive_at(totals)
     points = []
     for s in snaps:
-        point = {"snapshot": s["restic_id"], "time": s["time"], "present": False,
-                 "type": None, "size": None, "files": None, "mtime_us": None}
+        point = {"snapshot": s["restic_id"], "time": s["time"], "live": s["forgotten_at"] is None,
+                 "present": False, "type": None, "size": None, "files": None, "mtime_us": None}
         version = version_at(s["seq"]) if path_id else None
         if path_id == 0 or version is not None:  # the root is always there
             type_code = version["type"] if version else DIR

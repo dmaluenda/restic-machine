@@ -12,7 +12,11 @@ In your browser you get:
 
 - **restic-machine** (the name itself, top left): where the repository is, how restic gets
   its password, the exclude file and the index. When something is missing or wrong,
-  restic-machine opens on this page.
+  restic-machine opens on this page. Also the **copies of the repository**: mirrors of its
+  files on other disks (a backup of the backup, kept offline). A copy holds what the
+  repository held when it was made, so the index already knows it: pick it next to the
+  name, top centre, to browse it (only browse: no backups, retention or exclusions); in the
+  live view, the snapshots forgotten since but still on a copy show hatched.
 - **Browser:** a timeline of the snapshots, each bar as tall as the number of changes it
   brought, so an unusual one (thousands of files changed at once) stands out; the folder
   tree as it was in the chosen snapshot (open folders in place, right-click one to expand a

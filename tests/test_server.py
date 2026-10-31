@@ -257,6 +257,48 @@ class ExpandChangesTest(Served, unittest.TestCase):
         self.assertEqual(response.status, 404)
 
 
+class CopiesTest(Served, unittest.TestCase):
+    """A copy of the repository (a mirror on another disk) holds what the repository held when it
+    was made: browsed from the index, including what was forgotten here since."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data = Path(tmp.name)
+        restic = FakeRestic()
+        restic.add(1, "2026-01-01T10:00:00Z", {"/data/a": 1})
+        restic.add(2, "2026-01-02T10:00:00Z", {"/data/a": 2})
+        restic.add(3, "2026-01-05T10:00:00Z", {"/data/a": 3})
+        with closing(db.open_index(self.data, "f" * 64)) as con:
+            Indexer(con, restic).run()
+            restic.forget(1)  # forgotten after the copy was made
+            Indexer(con, restic).run()
+        cfg = make_config(self.data, RESTIC_REPOSITORY="fake:repo", RESTIC_PASSWORD="test-only")
+        cfg.copies = [{"name": "disk", "location": "", "copied_at": "2026-01-02T23:00"},
+                      {"name": "undated", "location": "", "copied_at": ""}]
+        self.start(server.App(cfg, restic_factory=lambda binary, env: restic))
+
+    def test_what_each_view_shows(self):
+        self.assertEqual([c["name"] for c in self.get_json("/api/status")["copies"]], ["disk", "undated"])
+        snapshots = self.get_json("/api/snapshots")
+        self.assertEqual([(s["id"], s["live"], s["copies"]) for s in snapshots],
+                         [(snapshot_id(1), False, ["disk"]), (snapshot_id(2), True, ["disk"]),
+                          (snapshot_id(3), True, [])])
+        points = lambda source: [p["snapshot"] for p in self.get_json(
+            f"/api/history?snapshot={snapshot_id(3)}&path=/data/a&source={source}")["points"]]
+        self.assertEqual(points("live"), [snapshot_id(1), snapshot_id(2), snapshot_id(3)])  # with what only a copy has
+        self.assertEqual(points("disk"), [snapshot_id(1), snapshot_id(2)])
+        self.assertEqual(points("undated"), [])
+        tree = self.get_json(f"/api/tree?snapshot={snapshot_id(1)}&path=/data&source=disk")  # forgotten, still browsed
+        self.assertEqual([e["size"] for e in tree["dirs"]["/data"]["entries"]], [1])
+        tree = self.get_json(f"/api/tree?snapshot={snapshot_id(2)}&path=/data&source=disk")
+        self.assertEqual(tree["previous"], snapshot_id(1))
+        response, _ = self.request(f"/api/tree?snapshot={snapshot_id(2)}&path=/data&source=nowhere", cookie=self.cookie)
+        self.assertEqual(response.status, 404)
+        refused = self.post_json("/api/restore", {"snapshot": snapshot_id(1), "path": "/data/a"}, status=409)
+        self.assertIn("only on a copy", refused["error"])
+
+
 def restic_path(native: Path) -> str:
     """How restic names a path of this computer: C:\\x\\y -> /C/x/y."""
     drive, rest = os.path.splitdrive(str(native))

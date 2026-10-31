@@ -394,7 +394,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                           for row in con.execute("SELECT * FROM series ORDER BY id")]
         return {"version": __version__, "ready": self.app.repo is not None, "problem": self.app.problem,
                 "repository": self.app.repo.repository_id if self.app.repo else None,
-                "name": self.app.cfg.name, "initial_path": self.app.cfg.initial_path, "series": series,
+                "name": self.app.cfg.name, "initial_path": self.app.cfg.initial_path,
+                "copies": [{"name": c["name"], "copied_at": c["copied_at"]} for c in self.app.cfg.copies],
+                "series": series,
                 "indexing": self.app.indexing, "attribution": ATTRIBUTION, "license": LICENSE,
                 "source": "/source"}
 
@@ -502,12 +504,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _snapshots(self) -> list[dict]:
         with closing(self.app.connect()) as con:
-            rows = query.snapshots(con)
-        return [{"id": row["restic_id"], "series": row["series"], "time": row["time"],
-                 "indexed": row["seq"] is not None, "tags": json.loads(row["info"]).get("tags") or [],
-                 "entries": row["n_entries"], "added": row["n_added"], "modified": row["n_modified"],
-                 "removed": row["n_removed"], "size": row["total_size"], "files": row["total_files"]}
-                for row in rows]
+            rows = query.snapshots(con, include_forgotten=True)
+        cutoffs = self._copy_cutoffs()
+        out = []
+        for row in rows:
+            live = row["forgotten_at"] is None
+            copies = [name for name, cutoff in cutoffs.items() if query.on_copy(row, cutoff)]
+            if not live and not copies:
+                continue  # gone from the repository, and no copy has it
+            out.append({"id": row["restic_id"], "series": row["series"], "time": row["time"],
+                        "indexed": row["seq"] is not None, "tags": json.loads(row["info"]).get("tags") or [],
+                        "entries": row["n_entries"], "added": row["n_added"], "modified": row["n_modified"],
+                        "removed": row["n_removed"], "size": row["total_size"], "files": row["total_files"],
+                        "live": live, "copies": copies})
+        return out
+
+    # -- where a snapshot is: the live repository, its copies --------------------------------
+
+    def _copy_cutoffs(self) -> dict:
+        """name -> query.copy_cutoff, for the copies whose last copy time is known."""
+        return {c["name"]: query.copy_cutoff(c["copied_at"]) for c in self.app.cfg.copies if c["copied_at"]}
+
+    def _shown(self, params: dict):
+        """Which snapshots a view of Browse shows (`source`): the live repository's, with those
+        only a copy still has (the default), or one copy's. A test on snapshot rows."""
+        source = params.get("source") or "live"
+        cutoffs = self._copy_cutoffs()
+        if source == "live":
+            return lambda row: row["forgotten_at"] is None or any(query.on_copy(row, c) for c in cutoffs.values())
+        if not any(c["name"] == source for c in self.app.cfg.copies):
+            raise ApiError(HTTPStatus.NOT_FOUND, f"no copy called {source}")
+        cutoff = cutoffs.get(source)
+        return lambda row: cutoff is not None and query.on_copy(row, cutoff)
+
+    @staticmethod
+    def _require_live(snap) -> None:
+        """Reading a file's content goes through restic, which only has what wasn't forgotten."""
+        if snap["forgotten_at"] is not None:
+            raise files.FileError(f"snapshot {snap['restic_id'][:8]} is only on a copy of the repository now,"
+                                  " and restic-machine can't read copies yet")
 
     def _dir(self, params: dict) -> dict:
         """One directory (the tree's first level); see _tree."""
@@ -518,8 +553,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _tree(self, params: dict) -> dict:
         """A directory and the ones below it, `depth` levels down (breadth first, up to `limit`
         entries: a directory that alone would go past it stays closed; when comparing, only what
-        differs is listed), as the Browse tree expands them. Changes are against `compare` (any snapshot of the same series) or else the
-        previous one; with `changed_only`, only the directories with changes below them are
+        differs is listed), as the Browse tree expands them. Changes are against `compare` (any
+        snapshot of the same series) or else the previous one shown (see _shown); with `changed_only`, only the directories with changes below them are
         opened, and with `with_removed` the removed ones too (which are then shown). A removed
         directory lists what it had, all of it removed."""
         path = query.normalize(params.get("path", "/"))
@@ -540,7 +575,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if previous["series"] != snap["series"]:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "only snapshots of the same host and paths can be compared")
             else:
-                previous = query.previous_snapshot(con, snap)
+                previous = query.previous_snapshot(con, snap, self._shown(params))
             while queue and rows < limit:
                 current, level = queue.pop(0)
                 try:
@@ -632,7 +667,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = query.normalize(_required(params, "path"))
         with closing(self._connect_for_reading()) as con:
             snap = query.find_snapshot(con, _required(params, "snapshot"))
-            points = query.history(con, snap, path)
+            points = query.history(con, snap, path, self._shown(params))
         return {"path": path, "points": points}
 
     # -- a file: restore it, compare its versions ---------------------------------------------
@@ -643,6 +678,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with closing(self.app.connect()) as con:
             snap = query.find_snapshot(con, _required(body, "snapshot"))
             info = query.entry(con, snap, path)
+        self._require_live(snap)
         return {"target": str(files.restore(self.app.require_repo().restic, snap, path, info))}
 
     def _diff(self, params: dict) -> dict:
@@ -652,17 +688,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         native = excludes.native_path(path)
         sides = {}
         for side in ("left", "right"):
-            source = _required(params, side)
-            if source == "disk":
+            version = _required(params, side)
+            if version == "disk":
                 sides[side] = files.disk_text(native)
                 continue
             with closing(self._connect_for_reading()) as con:
-                snap = query.find_snapshot(con, source)
+                snap = query.find_snapshot(con, version)
                 try:
                     info = query.entry(con, snap, path)
                 except LookupError:
                     sides[side] = None  # not in that snapshot
                     continue
+            self._require_live(snap)
             sides[side] = self.app.snapshot_text(snap, path, info)
         rows, changes = files.side_by_side(sides["left"] or [], sides["right"] or [])
         return {"path": path, "native": native, "rows": rows, "changes": changes,

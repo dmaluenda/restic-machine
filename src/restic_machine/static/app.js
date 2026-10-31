@@ -16,6 +16,7 @@ const state = {
   snapshot: null,         // restic id of the snapshot on screen
   compare: null,          // restic id of the older snapshot it is compared with, if any
   lastPick: null,         // the snapshot clicked last: a Ctrl+click keeps it, and drops the other
+  source: "live",         // what is browsed: "live" (the repository) or the name of a copy of it
   previous: null,         // what the changes shown are measured against
   expanded: null,         // open folders (a Set of paths), remembered between visits
   cache: null,            // path -> {entries, removed} for the snapshot (and comparison) on screen
@@ -56,12 +57,13 @@ function showBanner(message, warning = false) {
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
   const tab = { repository: "cli", settings: "machine" }[params.get("tab")] || params.get("tab") || "browse";
-  return { tab, snapshot: params.get("snapshot"), compare: params.get("compare") };
+  return { tab, snapshot: params.get("snapshot"), compare: params.get("compare"), source: params.get("source") || "live" };
 }
 
 function writeHash(push) {
   const params = state.tab !== "browse" ? { tab: state.tab }
     : state.snapshot ? { snapshot: state.snapshot, ...(state.compare ? { compare: state.compare } : {}) } : {};
+  if (state.tab === "browse" && state.source !== "live") params.source = state.source;
   const hash = "#" + new URLSearchParams(params);
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
 }
@@ -72,6 +74,7 @@ const TABS = ["browse", "scheduler", "retention", "cli", "machine"];
 
 function showTab(tab, push = true) {
   if (!state.status?.ready) tab = "machine";  // nothing else works without a repository
+  else if (state.source !== "live" && !["browse", "machine"].includes(tab)) tab = "browse";  // a copy is only browsed
   state.tab = tab;
   for (const name of TABS) {
     $(`#view-${name}`).hidden = name !== tab;
@@ -88,6 +91,43 @@ async function becameReady() {
   if (!state.snapshots.length) await loadSnapshots();
   showTab("browse");
 }
+
+// ---- what is browsed: the live repository, or a copy of it (only browsed) ----------------
+// A copy (a mirror of the repository on another disk, say) holds what the repository held when
+// it was made, so the index already knows its snapshots, including those since forgotten here.
+
+const copyOf = (name) => state.status?.copies.find((c) => c.name === name);
+const copyLabel = (c) => `${c.name} · ${c.copied_at ? `copy of ${c.copied_at.replace("T", " ")}` : "copy date not set"}`;
+
+function renderSources() {
+  const status = state.status;
+  if (state.source !== "live" && !copyOf(state.source)) state.source = "live";
+  const select = $("#source");
+  select.hidden = !status.ready || !status.copies.length;
+  select.replaceChildren(el("option", { value: "live" }, `${status.name || "repository"} · live`),
+    ...status.copies.map((c) => el("option", { value: c.name }, copyLabel(c))));
+  select.value = state.source;
+  const browseOnly = state.source !== "live";
+  for (const name of TABS.filter((tab) => tab !== "machine")) {
+    $(`#tab-${name}`).disabled = !status.ready || (browseOnly && name !== "browse");
+  }
+  $("#browse-only").hidden = !browseOnly;
+}
+
+async function changeSource(source) {
+  state.source = source;
+  state.snapshot = null;
+  state.compare = null;
+  state.lastPick = null;
+  renderSources();
+  if (state.tab !== "browse") showTab("browse");
+  await loadSnapshots();
+  writeHash(true);
+}
+
+// Whether restic can read a snapshot's files: only the live repository's, so far.
+const readable = (id) => state.snapshots.find((s) => s.id === id)?.live !== false;
+const elsewhere = (s) => `only on ${s.copies.join(", ")} now`;
 
 // ---- status and indexing -------------------------------------------------------------
 
@@ -123,7 +163,7 @@ function renderStatus() {
       : [el("span", { class: "muted" }, `repository ${short}`)]));
   document.title = status.name ? `${status.name} · restic-machine` : "restic-machine";
   $("#repo").title = status.repository || "";
-  for (const name of TABS.filter((tab) => tab !== "machine")) $(`#tab-${name}`).disabled = !status.ready;
+  renderSources();
   $("#reindex").hidden = !status.ready;
   $("#attribution").textContent = status.attribution;
   $("#version").textContent = `v${status.version}`;
@@ -163,7 +203,9 @@ async function loadSnapshots() {
   const wanted = all.find((s) => s.id === state.snapshot);
   if (wanted) state.series = wanted.series;
   if (state.series == null && all.length) state.series = all[all.length - 1].series;
-  state.snapshots = all.filter((s) => s.series === state.series);
+  // The live view shows, besides what restic has, what only a copy still has; a copy, its own.
+  state.snapshots = all.filter((s) => s.series === state.series
+    && (state.source === "live" || s.copies.includes(state.source)));
   if (state.status) $("#series").value = state.series;
   renderTimeline();
 
@@ -200,9 +242,11 @@ function renderTimeline() {
     const spike = changed != null && changed >= 1000 && rates[i] > 10 * Math.max(medianRate, 1);
     x += gap ? 24 : 14;
     const chosen = s.id === state.snapshot || s.id === state.compare;
+    const away = state.source === "live" && !s.live;  // forgotten here, still on a copy
     const classes = ["snap", s.indexed ? "" : "pending", spike ? "spike" : "", gap ? "gap" : "",
-      chosen ? "selected" : ""].filter(Boolean).join(" ");
+      away ? "elsewhere" : "", chosen ? "selected" : ""].filter(Boolean).join(" ");
     const lines = [`${formatDate(date)} · ${s.id.slice(0, 8)}`];
+    if (away) lines.push(elsewhere(s));
     if (!s.indexed) lines.push("not indexed yet");
     else lines.push(`${formatSize(s.size)} in ${count(s.files)} files`,
       changed == null ? "first snapshot" : `+${count(s.added)} new · ~${count(s.modified)} modified · −${count(s.removed)} removed`);
@@ -262,6 +306,10 @@ function renderSnapshotInfo() {
       previous ? el("span", { class: "muted" }, ` since ${formatDate(snapshotDate(previous))}`) : null));
   }
   if (s.tags.length) parts.push(el("span", { class: "muted" }, `tags: ${s.tags.join(", ")}`));
+  if (!s.live) {
+    parts.push(el("span", { class: "badge elsewhere", title: "Forgotten in the repository: browsed from the index; " +
+      "its files can't be restored or compared until restic-machine can read the copy" }, elsewhere(s)));
+  }
   info.replaceChildren(...parts);
 }
 
@@ -357,7 +405,7 @@ function restoreExpanded() {
 
 async function fetchTree(path, extra = {}, signal = undefined) {
   const key = treeKey();
-  const params = { snapshot: state.snapshot, path, depth: 1, ...extra };
+  const params = { snapshot: state.snapshot, path, depth: 1, source: state.source, ...extra };
   if (state.compare) params.compare = state.compare;
   const data = await api("/api/tree", params, { signal });
   if (treeKey() !== key) return data;  // another snapshot (or pair) was chosen meanwhile
@@ -555,7 +603,8 @@ function entryRow(entry, path, depth, parentSize, removed) {
   // a removed file is restored or compared as it was in the snapshot that still had it
   isText(entry) ? compareButton(entry, path, removed ? state.previous : state.snapshot) : null,
   entry.type === "file" ? restoreButton(entry, path, removed ? state.previous : state.snapshot) : null,
-  removed || !state.excludes ? null : excludeButton(entry, path)));
+  // exclusions are about the next backups: of the live repository only
+  removed || !state.excludes || state.source !== "live" ? null : excludeButton(entry, path)));
   row.addEventListener("click", (event) => {
     if (!event.target.closest("button")) openDetail(path);
   });
@@ -651,8 +700,11 @@ function compareButton(entry, path, snapshot) {
 }
 
 function restoreButton(entry, path, snapshot) {
+  const can = readable(snapshot);
   return el("button", {
-    type: "button", class: "history", title: "Restore it as it was in this snapshot (next to the file, with the date in its name)",
+    type: "button", class: "history", disabled: !can,
+    title: can ? "Restore it as it was in this snapshot (next to the file, with the date in its name)"
+      : "This snapshot is only on a copy now: restoring from a copy comes next",
     "aria-label": `Restore ${entry.name}`, onclick: () => restoreFile(entry, path, snapshot),
   }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
     svg("path", { d: "M3.5 6.5 A5 5 0 1 1 3 9.5", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }),
@@ -746,7 +798,7 @@ async function openDetail(path) {
   $("#detail-path").textContent = path;
   let data;
   try {
-    data = await api("/api/history", { snapshot: state.snapshot, path }, { signal: controller.signal });
+    data = await api("/api/history", { snapshot: state.snapshot, path, source: state.source }, { signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) return;  // a newer one was asked for
     $("#chart").textContent = error.message;
@@ -843,6 +895,7 @@ function bind() {
     }
     stopped("restic-machine has stopped. You can close this tab, and start it again any time.");
   });
+  $("#source").addEventListener("change", (event) => changeSource(event.target.value));
   $("#series").addEventListener("change", (event) => {
     state.series = Number(event.target.value);
     state.snapshot = null;
@@ -870,7 +923,15 @@ function bind() {
   });
   for (const name of TABS) $(`#tab-${name}`).addEventListener("click", () => showTab(name));
   window.addEventListener("popstate", () => {
-    const { tab, snapshot, compare } = readHash();
+    const { tab, snapshot, compare, source } = readHash();
+    if (source !== state.source) {
+      state.source = source;
+      state.snapshot = snapshot;
+      state.compare = compare;
+      renderSources();
+      loadSnapshots();
+      return;
+    }
     if (tab !== state.tab) {
       showTab(tab, false);
       if (tab !== "browse") return;
@@ -896,10 +957,11 @@ function bind() {
 
 async function init() {
   bind();
-  const { tab, snapshot, compare } = readHash();
+  const { tab, snapshot, compare, source } = readHash();
   state.tab = tab;  // before loading, so the address keeps the tab meanwhile
   state.snapshot = snapshot;
   state.compare = compare;
+  state.source = source;
   renderPickHint();
   await refreshStatus();
   if (state.status?.ready && !state.snapshots.length) await loadSnapshots();
