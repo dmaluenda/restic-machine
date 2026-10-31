@@ -291,7 +291,9 @@
         <p class="hint">Other places that hold this same repository: a mirror of its files, on a disk kept
           offline say. They are only browsed, never written to: pick one next to the name, top centre. A copy
           holds what the repository held when it was made, so the index already knows its snapshots, even those
-          forgotten here since: give the time of the last copy. Reading its files (to restore) comes next.</p>
+          forgotten here since: give the time of the last copy. <code>restic-machine check --source NAME</code>
+          (run by the job that makes the copy) records what it really holds and checks it. A copy on a Windows
+          share on the backup's server logs in as the backup does, unless it has its own user.</p>
         <div id="copies-list" class="copies-list"></div>
         <button type="button" id="copies-add">Add a copy</button>
       </fieldset>

@@ -36,7 +36,7 @@ from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, backup, config, db, excludes, files, query, retention, schedule
+from . import __version__, backup, config, copies, db, excludes, files, query, retention, schedule
 from .indexer import IndexBusy, Indexer, timestamp_us
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -395,7 +395,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return {"version": __version__, "ready": self.app.repo is not None, "problem": self.app.problem,
                 "repository": self.app.repo.repository_id if self.app.repo else None,
                 "name": self.app.cfg.name, "initial_path": self.app.cfg.initial_path,
-                "copies": [{"name": c["name"], "copied_at": c["copied_at"]} for c in self.app.cfg.copies],
+                "copies": self._copies_status(),
                 "series": series,
                 "indexing": self.app.indexing, "attribution": ATTRIBUTION, "license": LICENSE,
                 "source": "/source"}
@@ -505,37 +505,60 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _snapshots(self) -> list[dict]:
         with closing(self.app.connect()) as con:
             rows = query.snapshots(con, include_forgotten=True)
-        cutoffs = self._copy_cutoffs()
+        holds = self._copies_hold()
         out = []
         for row in rows:
             live = row["forgotten_at"] is None
-            copies = [name for name, cutoff in cutoffs.items() if query.on_copy(row, cutoff)]
-            if not live and not copies:
+            on = [name for name, test in holds.items() if test(row)]
+            if not live and not on:
                 continue  # gone from the repository, and no copy has it
             out.append({"id": row["restic_id"], "series": row["series"], "time": row["time"],
                         "indexed": row["seq"] is not None, "tags": json.loads(row["info"]).get("tags") or [],
                         "entries": row["n_entries"], "added": row["n_added"], "modified": row["n_modified"],
                         "removed": row["n_removed"], "size": row["total_size"], "files": row["total_files"],
-                        "live": live, "copies": copies})
+                        "live": live, "copies": on})
         return out
 
     # -- where a snapshot is: the live repository, its copies --------------------------------
 
-    def _copy_cutoffs(self) -> dict:
-        """name -> query.copy_cutoff, for the copies whose last copy time is known."""
-        return {c["name"]: query.copy_cutoff(c["copied_at"]) for c in self.app.cfg.copies if c["copied_at"]}
+    def _seen(self) -> dict:
+        """What each copy was last seen holding (copies.check), for this repository."""
+        repo = self.app.repo
+        return copies.seen(self.app.cfg, repo.repository_id) if repo else {}
+
+    def _copies_status(self) -> list[dict]:
+        """Each copy, with what it was last seen holding and its last check, if any."""
+        seen = self._seen()
+        return [{"name": c["name"], "copied_at": c["copied_at"],
+                 **{key: seen.get(c["name"], {}).get(key) for key in ("seen_at", "newest", "check")}}
+                for c in self.app.cfg.copies]
+
+    def _copies_hold(self) -> dict:
+        """copy name -> a test on snapshot rows: does that copy hold it? What it was last seen
+        holding, or else what it held by its time (copied_at); a copy with neither holds nothing."""
+        seen, holds = self._seen(), {}
+        for c in self.app.cfg.copies:
+            ids = seen.get(c["name"], {}).get("snapshots")
+            if ids is not None:
+                ids = set(ids)
+                holds[c["name"]] = lambda row, ids=ids: row["seq"] is not None and row["restic_id"] in ids
+            elif c["copied_at"]:
+                cutoff = query.copy_cutoff(c["copied_at"])
+                holds[c["name"]] = lambda row, cutoff=cutoff: query.on_copy(row, cutoff)
+            else:
+                holds[c["name"]] = lambda row: False
+        return holds
 
     def _shown(self, params: dict):
         """Which snapshots a view of Browse shows (`source`): the live repository's, with those
         only a copy still has (the default), or one copy's. A test on snapshot rows."""
         source = params.get("source") or "live"
-        cutoffs = self._copy_cutoffs()
+        holds = self._copies_hold()
         if source == "live":
-            return lambda row: row["forgotten_at"] is None or any(query.on_copy(row, c) for c in cutoffs.values())
-        if not any(c["name"] == source for c in self.app.cfg.copies):
+            return lambda row: row["forgotten_at"] is None or any(test(row) for test in holds.values())
+        if source not in holds:
             raise ApiError(HTTPStatus.NOT_FOUND, f"no copy called {source}")
-        cutoff = cutoffs.get(source)
-        return lambda row: cutoff is not None and query.on_copy(row, cutoff)
+        return holds[source]
 
     @staticmethod
     def _require_live(snap) -> None:

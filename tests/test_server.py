@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from restic_machine import config, db, excludes, server
+from restic_machine import config, copies, db, excludes, server
 from restic_machine.indexer import Indexer
 from test_indexer import FakeRestic, snapshot_id
 
@@ -297,6 +297,14 @@ class CopiesTest(Served, unittest.TestCase):
         self.assertEqual(response.status, 404)
         refused = self.post_json("/api/restore", {"snapshot": snapshot_id(1), "path": "/data/a"}, status=409)
         self.assertIn("only on a copy", refused["error"])
+
+    def test_what_a_copy_was_seen_holding_wins(self):
+        copies._remember(self.app.cfg, "f" * 64, "undated", seen_at="2026-01-06T09:00:00",
+                         snapshots=[snapshot_id(2), snapshot_id(3)], newest="2026-01-05T10:00:00Z")
+        snapshots = self.get_json("/api/snapshots")
+        self.assertEqual([s["copies"] for s in snapshots], [["disk"], ["disk", "undated"], ["undated"]])
+        status = {c["name"]: c for c in self.get_json("/api/status")["copies"]}
+        self.assertEqual(status["undated"]["seen_at"], "2026-01-06T09:00:00")
 
 
 def restic_path(native: Path) -> str:

@@ -115,9 +115,10 @@ class ConfigTest(unittest.TestCase):
             {"name": "offline-disk", "location": "", "copied_at": "2026-10-24T12:14"},
             {"name": "other", "location": "/mnt/other/repo", "copied_at": ""}]})
         config.save(cfg)
+        nobody = {"share_user": "", "share_password_file": ""}
         self.assertEqual(config.load(cfg.path).copies, [
-            {"name": "offline-disk", "location": "", "copied_at": "2026-10-24T12:14"},
-            {"name": "other", "location": "/mnt/other/repo", "copied_at": ""}])
+            {"name": "offline-disk", "location": "", "copied_at": "2026-10-24T12:14", **nobody},
+            {"name": "other", "location": "/mnt/other/repo", "copied_at": "", **nobody}])
         for wrong in ([{"name": ""}], [{"name": "live"}], [{"name": "a"}, {"name": "A"}],
                       [{"name": "a", "copied_at": "yesterday"}], {"name": "a"}):
             with self.assertRaises(config.ConfigError, msg=wrong):

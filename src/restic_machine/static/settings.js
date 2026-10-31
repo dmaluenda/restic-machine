@@ -63,6 +63,8 @@ function values() {
     name: row.querySelector("[data-key=name]").value.trim(),
     location: row.querySelector("[data-key=location]").value.trim(),
     copied_at: row.querySelector("[data-key=copied_at]").value,
+    share_user: row.querySelector("[data-key=share_user]").value.trim(),
+    share_password_file: row.querySelector("[data-key=share_password_file]").value.trim(),
   })).filter((c) => c.name || c.location || c.copied_at);
   return out;
 }
@@ -74,6 +76,8 @@ function copyRow(copy = {}) {
     el("label", {}, "Name", input("name", { placeholder: "e.g. offline-disk", maxlength: 40 })),
     el("label", { class: "grow" }, "Location", input("location", { placeholder: "where restic opens it (can wait)" })),
     el("label", {}, "Last copied", input("copied_at", { type: "datetime-local" })),
+    el("label", {}, "Share user", input("share_user", { placeholder: "the backup's, if empty" })),
+    el("label", {}, "Its password file", input("share_password_file", { placeholder: "" })),
     el("button", { type: "button", class: "icon", "aria-label": "Remove this copy", onclick: () => row.remove() }, "×"));
   return row;
 }

@@ -8,7 +8,8 @@ repository, and a browser left open (or an indexer that died) could make the own
 `forget --prune` fail. The price is that a read may fail while a prune is running: that
 is reported as RepositoryUnavailable, i.e. "try again later".
 
-`dump()` reads a file's content (to restore it next to the original, or to compare versions).
+`dump()` reads a file's content (to restore it next to the original, or to compare versions);
+`check()` verifies a repository (a copy of it, after it is made).
 
 The only call that writes is `forget()`, which applies a retention policy. The web
 interface never calls it (it only simulates, with --dry-run); the `restic-machine forget`
@@ -79,6 +80,15 @@ class Restic:
             if code != 0:
                 stderr.seek(0)
                 raise self._error(code, stderr.read().decode("utf-8", "replace"))
+
+    def check(self, extra: list[str], out) -> int:
+        """`restic check` (it only reads, so without a lock: a copy may be on a read-only
+        share), its output to `out`. Returns restic's exit code."""
+        try:
+            return subprocess.run([self.binary, "--no-lock", "check", *extra], env=self.env, stdin=subprocess.DEVNULL,
+                                  stdout=out, stderr=subprocess.STDOUT, **_NO_WINDOW).returncode
+        except FileNotFoundError:
+            raise ResticError(f"restic not found: {self.binary}") from None
 
     def ls(self, snapshot_id: str) -> Iterator[dict]:
         """Every node (file, directory, symlink...) of a snapshot."""

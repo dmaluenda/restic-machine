@@ -97,7 +97,12 @@ async function becameReady() {
 // it was made, so the index already knows its snapshots, including those since forgotten here.
 
 const copyOf = (name) => state.status?.copies.find((c) => c.name === name);
-const copyLabel = (c) => `${c.name} · ${c.copied_at ? `copy of ${c.copied_at.replace("T", " ")}` : "copy date not set"}`;
+// "copy of" the newest snapshot it was seen holding, or else the time of the copy given by hand
+function copyLabel(c) {
+  const until = c.newest ? formatDate(snapshotDate({ time: c.newest })) : c.copied_at?.replace("T", " ");
+  const check = c.check ? ` · ${c.check.ok ? "checked" : "CHECK FAILED"} ${c.check.at.slice(0, 10)}` : "";
+  return `${c.name} · ${until ? `copy of ${until}` : "copy date not set"}${check}`;
+}
 
 function renderSources() {
   const status = state.status;

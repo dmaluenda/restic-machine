@@ -200,7 +200,10 @@ def normalize_copies(raw, where: str = "copies") -> list[dict]:
                 copied_at = datetime.fromisoformat(copied_at).strftime("%Y-%m-%dT%H:%M")
             except ValueError:
                 raise ConfigError(f"{where}: {name}: copied_at is a date and time like 2026-10-24T12:14") from None
-        copies.append({"name": name, "location": str(item.get("location") or "").strip(), "copied_at": copied_at})
+        copies.append({"name": name, "location": str(item.get("location") or "").strip(), "copied_at": copied_at,
+                       # a login for its Windows share, if not the backup's (see copies.login)
+                       "share_user": str(item.get("share_user") or "").strip(),
+                       "share_password_file": str(item.get("share_password_file") or "").strip()})
     return copies
 
 
@@ -388,7 +391,8 @@ def dump(cfg: Config) -> str:
         lines += ["[browse]", f"initial_path = {_toml(cfg.initial_path)}", ""]
     for item in cfg.copies:
         lines += ["# A copy of this repository (browsed, never written to)", "[[copies]]",
-                  *(f"{key} = {_toml(item[key])}" for key in ("name", "location", "copied_at") if item[key]), ""]
+                  *(f"{key} = {_toml(item[key])}" for key in ("name", "location", "copied_at", "share_user",
+                                                                "share_password_file") if item[key]), ""]
     backup, default = cfg.backup, normalize_backup({})
     plain = [f"{key} = {_toml(backup[key])}" for key in ("sources", "use_fs_snapshot", "lock_name")
              if backup[key] != default[key]]

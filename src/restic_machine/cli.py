@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-from . import __version__, backup, config, db, query, schedule, server
+from . import __version__, backup, config, copies, db, query, schedule, server
 from .indexer import IndexBusy, Indexer
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -103,6 +103,19 @@ def _parser() -> argparse.ArgumentParser:
     backup.add_argument("--prune", choices=("auto", "always", "never"), default="auto",
                         help="apply the retention policy: when due (default), always, or not")
     backup.set_defaults(command=cmd_backup)
+
+    check = commands.add_parser(
+        "check", help="check a copy of the repository and record which snapshots it holds",
+        description="For a copy of the repository ([[copies]] in the config file: a mirror of its files on"
+                    " another disk), record which snapshots it holds and run `restic check` on it, without a"
+                    " lock (it only reads). Meant for the job that makes the copy, right after copying. Exit"
+                    " code: 0 the copy is sound, 1 restic check found problems, 75 the copy can't be reached"
+                    " now, 78 not set up (no such copy, no location, or not a copy of this repository)."
+                    " The log is check.log next to the index.")
+    check.add_argument("--source", required=True, metavar="COPY", help="the copy's name")
+    check.add_argument("--read-data-subset", metavar="N/T",
+                       help="also read this part of its data, as restic check takes it (e.g. 11/12)")
+    check.set_defaults(command=cmd_check)
 
     sched = commands.add_parser("schedule", help="show the backup schedule, or install it (Windows, asks for administrator)")
     sched.add_argument("--install", action="store_true", help="create or update the scheduled task (UAC prompt)")
@@ -262,6 +275,10 @@ def cmd_forget(cfg: config.Config, args) -> int:
 
 def cmd_backup(cfg: config.Config, args) -> int:
     return backup.run(cfg, prune=args.prune)
+
+
+def cmd_check(cfg: config.Config, args) -> int:
+    return copies.check(cfg, args.source, args.read_data_subset)
 
 
 def cmd_schedule(cfg: config.Config, args) -> int:
