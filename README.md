@@ -5,8 +5,8 @@ Browse the history of your repository: a timeline of your snapshots and, for any
 the tree of files as it was then, with sizes and modification times. Manage its retention
 policy and see what it would keep before it deletes anything. Schedule the backups.
 
-> **Status: early development.** Browsing, scheduled backups, setup and the retention
-> policy work. Next: restic's commands from the interface, and downloading and restoring files.
+> **Status: early development.** Browsing (also copies of the repository), restoring and
+> comparing files, scheduled backups, setup and the retention policy work.
 
 In your browser you get:
 
@@ -37,7 +37,6 @@ In your browser you get:
 - **Retention:** the retention policy (which snapshots to keep), a calendar of what it
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.
-- **restic-CLI:** restic's commands (coming next).
 
 ## How it works
 

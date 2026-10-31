@@ -56,7 +56,8 @@ function showBanner(message, warning = false) {
 
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  const tab = { repository: "cli", settings: "machine" }[params.get("tab")] || params.get("tab") || "browse";
+  const tab = { settings: "machine" }[params.get("tab")] || params.get("tab") || "browse";
+  if (!TABS.includes(tab)) return { tab: "browse", snapshot: null, compare: null, source: "live" };  // an old address
   return { tab, snapshot: params.get("snapshot"), compare: params.get("compare"), source: params.get("source") || "live" };
 }
 
@@ -68,9 +69,9 @@ function writeHash(push) {
   if (hash !== location.hash) history[push ? "pushState" : "replaceState"](null, "", hash);
 }
 
-// ---- tabs: Browser, Scheduler, Retention, restic-CLI, and the name itself (repository, index…) ------------------
+// ---- tabs: Browser, Scheduler, Retention, and the name itself (repository, index…) ------------------
 
-const TABS = ["browse", "scheduler", "retention", "cli", "machine"];
+const TABS = ["browse", "scheduler", "retention", "machine"];
 
 function showTab(tab, push = true) {
   if (!state.status?.ready) tab = "machine";  // nothing else works without a repository
