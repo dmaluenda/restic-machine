@@ -8,6 +8,12 @@ policy and see what it would keep before it deletes anything. Schedule the backu
 > **Status: beta (0.1.0b1).** Browsing (also copies of the repository), restoring and
 > comparing files, scheduled backups, setup and the retention policy work.
 
+![Browse: the timeline of snapshots, the folder tree of the chosen one, and the size of a folder over time](docs/browser.png)
+
+![Retention: the policy, and a calendar of what it would leave](docs/retention.png)
+
+<sub>Made-up data. Hatched bars are snapshots forgotten in the repository but still on a copy of it.</sub>
+
 In your browser you get:
 
 - **restic-machine** (the name itself, top left): where the repository is, how restic gets
