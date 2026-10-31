@@ -215,6 +215,19 @@ button.history:hover { color: var(--accent); }
 /* a page scrolls in full width, its content centred at up to 980px */
 .page { flex: 1; min-height: 0; overflow: auto; padding: 8px max(16px, calc((100% - 980px) / 2)) 24px; }
 .page h2 { font-size: 17px; margin: 18px 0 6px; }
+/* Retention: the policy and the check on the left, the calendar (with its controls) on the right,
+   staying in view while the left column scrolls */
+.page.two-columns {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 32px; align-content: start;
+  padding-left: max(16px, calc((100% - 1600px) / 2)); padding-right: max(16px, calc((100% - 1600px) / 2));
+}
+.page.two-columns[hidden] { display: none; }
+.page.two-columns > section { grid-column: 1; min-width: 0; }
+.page.two-columns > .right-column { grid-column: 2; grid-row: 1 / span 10; align-self: start; position: sticky; top: 0; }
+@media (max-width: 1000px) {
+  .page.two-columns { display: block; }
+  .page.two-columns > .right-column { position: static; }
+}
 .hint { color: var(--muted); font-size: 13px; margin: 2px 0 8px; }
 .callout { padding: 8px 12px; border-radius: 6px; background: var(--accent-soft); }
 .callout.warning { background: color-mix(in srgb, var(--spike) 18%, var(--panel)); }
