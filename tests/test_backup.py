@@ -10,11 +10,12 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from restic_machine import backup, config, schedule
+from restic_machine import backup, config, db, query, schedule
 
 RESTIC = os.environ.get("RESTIC_MACHINE_TEST_RESTIC") or shutil.which("restic")
 
@@ -95,7 +96,7 @@ class RunTest(unittest.TestCase):
             clean.update({k: v for k, v in env.items() if v})
             subprocess.run([RESTIC, "init"], env=clean, check=True, capture_output=True)
             cfg = config.Config(restic_binary=RESTIC, restic_env=env, excludes_file=tmp / "excludes.txt",
-                                retention={"keep_last": 1, "prune": True},
+                                retention={"keep_last": 1, "prune": True}, data_dir=tmp / "data",
                                 backup=config.normalize_backup({"sources": [str(tmp / "src")], "use_fs_snapshot": False,
                                                                 "lock_name": f"Local\\restic-machine-run-{os.getpid()}"}))
             with mock.patch.dict(os.environ, {"RESTIC_MACHINE_DATA": str(tmp / "data")}):
@@ -108,6 +109,12 @@ class RunTest(unittest.TestCase):
             self.assertEqual(len(json.loads(listing)), 1)  # keep_last 1 after the prune
             self.assertEqual(log.count(" OK"), 2)
             self.assertIn("restic forget --keep-last 1 --prune", log)
+            # each run leaves restic-machine's index up to date: the new snapshot in, the pruned one out
+            self.assertIn("index: 1 new snapshot read (", log)
+            self.assertIn("index: 1 new snapshot read, 1 forgotten (", log)
+            repository_id = db.known_repository(tmp / "data", cfg.repository_label())
+            with closing(db.open_index(tmp / "data", repository_id)) as con:
+                self.assertEqual(len(query.snapshots(con)), 1)
             files = subprocess.run([RESTIC, "ls", "latest", "--json"], capture_output=True, check=True,
                                    env=clean).stdout.decode()
             self.assertIn("a.txt", files)

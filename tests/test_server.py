@@ -6,6 +6,7 @@
 import http.client
 import io
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -13,7 +14,7 @@ import time
 import unittest
 import zipfile
 from contextlib import closing
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -254,6 +255,62 @@ class ExpandChangesTest(Served, unittest.TestCase):
         self.assertTrue(tree["truncated"])
         response, _ = self.request(f"/api/tree?snapshot={snapshot_id(2)}&path=/data/nowhere", cookie=self.cookie)
         self.assertEqual(response.status, 404)
+
+
+def restic_path(native: Path) -> str:
+    """How restic names a path of this computer: C:\\x\\y -> /C/x/y."""
+    drive, rest = os.path.splitdrive(str(native))
+    return "/" + "/".join(([drive.rstrip(":")] if drive else []) + [p for p in rest.replace("\\", "/").split("/") if p])
+
+
+class FilesTest(Served, unittest.TestCase):
+    """A file of a snapshot: restored next to the original, compared line by line."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data = Path(tmp.name) / "data"
+        self.work = Path(tmp.name) / "work"
+        self.work.mkdir()
+        self.notes = restic_path(self.work / "notes.txt")
+        self.blob = restic_path(self.work / "blob.bin")
+        restic = FakeRestic()
+        first, second = b"one\ntwo\nthree\n", b"one\n2\nthree\nfour\n"
+        restic.add(1, "2026-01-01T10:00:00Z", {self.notes: (len(first), "2026-01-01T09:30:00Z"), self.blob: 4})
+        restic.add(2, "2026-01-02T10:00:00Z", {self.notes: (len(second), "2026-01-02T09:30:00Z"), self.blob: 4})
+        restic.contents = {(snapshot_id(1), self.notes): first, (snapshot_id(2), self.notes): second,
+                           (snapshot_id(1), self.blob): b"\0\1\2\3"}
+        with closing(db.open_index(self.data, "f" * 64)) as con:
+            Indexer(con, restic).run()
+        cfg = make_config(self.data, RESTIC_REPOSITORY="fake:repo", RESTIC_PASSWORD="test-only")
+        self.start(server.App(cfg, restic_factory=lambda binary, env: restic))
+
+    def test_restore_next_to_the_original(self):
+        stamp = datetime(2026, 1, 1, 10, tzinfo=timezone.utc).astimezone().strftime("%Y%m%d-%H%M")
+        target = self.work / f"notes_{stamp}.txt"
+        self.assertEqual(self.post_json("/api/restore", {"snapshot": snapshot_id(1), "path": self.notes}),
+                         {"target": str(target)})
+        self.assertEqual(target.read_bytes(), b"one\ntwo\nthree\n")
+        self.assertEqual(datetime.fromtimestamp(target.stat().st_mtime, timezone.utc),
+                         datetime(2026, 1, 1, 9, 30, tzinfo=timezone.utc))
+        again = self.post_json("/api/restore", {"snapshot": snapshot_id(1), "path": self.notes}, status=409)
+        self.assertIn("already exists", again["error"])  # never over a file
+        folder = self.post_json("/api/restore", {"snapshot": snapshot_id(1), "path": restic_path(self.work)}, status=409)
+        self.assertIn("only files", folder["error"])
+
+    def test_compare_two_snapshots_or_the_disk(self):
+        diff = self.get_json(f"/api/diff?path={self.notes}&left={snapshot_id(1)}&right={snapshot_id(2)}")
+        self.assertEqual(diff["changes"], 2)
+        self.assertEqual(diff["rows"], [["same", 1, "one", 1, "one"], ["changed", 2, "two", 2, "2"],
+                                        ["same", 3, "three", 3, "three"], ["added", None, None, 4, "four"]])
+        diff = self.get_json(f"/api/diff?path={self.notes}&left={snapshot_id(2)}&right=disk")
+        self.assertEqual((diff["changes"], diff["missing"]), (1, {"left": False, "right": True}))
+        (self.work / "notes.txt").write_bytes(b"one\r\n2\r\nthree\r\nfour\r\n")  # line ends don't count
+        diff = self.get_json(f"/api/diff?path={self.notes}&left={snapshot_id(2)}&right=disk")
+        self.assertEqual((diff["changes"], diff["missing"]), (0, {"left": False, "right": False}))
+        response, body = self.request(f"/api/diff?path={self.blob}&left={snapshot_id(1)}&right=disk", cookie=self.cookie)
+        self.assertEqual(response.status, 409)
+        self.assertIn("not a text file", json.loads(body)["error"])
 
 
 class SetupTest(Served, unittest.TestCase):

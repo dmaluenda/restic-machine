@@ -80,6 +80,32 @@
     </main>
   </div>
 
+  <div id="compare" class="compare" role="dialog" aria-modal="true" aria-labelledby="compare-title" hidden>
+    <div class="compare-panel">
+      <div class="compare-head">
+        <h2 id="compare-title"></h2>
+        <span id="compare-summary" class="muted" aria-live="polite"></span>
+        <span class="compare-nav">
+          <button id="compare-prev" type="button" title="Previous change (Shift+F7, Alt+↑)">◀ Previous</button>
+          <span id="compare-position" class="muted"></span>
+          <button id="compare-next" type="button" title="Next change (F7, Alt+↓)">Next ▶</button>
+        </span>
+        <button id="compare-close" type="button" class="icon" aria-label="Close">&times;</button>
+      </div>
+      <p id="compare-path" class="muted path"></p>
+      <div class="compare-pick">
+        <label>Left <select id="compare-left"></select></label>
+        <label>Right <select id="compare-right"></select></label>
+      </div>
+      <div id="compare-body" class="compare-body">
+        <table id="compare-table">
+          <colgroup><col class="no"><col><col class="no"><col></colgroup>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="view-scheduler" class="view page" role="tabpanel" aria-labelledby="tab-scheduler" hidden>
     <section aria-labelledby="backups-title">
       <h2 id="backups-title">Scheduled backups</h2>

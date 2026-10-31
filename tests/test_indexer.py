@@ -37,6 +37,7 @@ class FakeRestic:
         self.repo = {}
         self.ls_calls = []
         self.fail_at = None  # (snapshot id, node position) where ls breaks off
+        self.contents = {}  # (snapshot id, path) -> bytes, for dump
 
     def add(self, n, time, files, host="host", paths=("/data",), tree=None):
         info = {"id": snapshot_id(n), "time": time, "hostname": host, "paths": list(paths),
@@ -60,6 +61,9 @@ class FakeRestic:
         keep = newest_first[:n]
         return [{"keep": keep, "remove": newest_first[n:],
                  "reasons": [{"snapshot": info, "matches": ["last snapshot"]} for info in keep]}]
+
+    def dump(self, restic_id, path, out):
+        out.write(self.contents[(restic_id, path)])
 
     def ls(self, restic_id):
         self.ls_calls.append(restic_id)

@@ -170,6 +170,17 @@ def removed_entries(con: sqlite3.Connection, snap: sqlite3.Row, previous: sqlite
     return _sorted(entries)
 
 
+def entry(con: sqlite3.Connection, snap: sqlite3.Row, path: str) -> dict:
+    """One path as it was in `snap`: its type, size and mtime (LookupError if it wasn't there)."""
+    path_id = resolve_path(con, path)
+    row = con.execute(
+        f"SELECT type, size, mtime_us FROM version v WHERE v.path = :path AND {_ALIVE.format(t='v', seq='seq')}",
+        {"path": path_id, "series": snap["series"], "seq": snap["seq"]}).fetchone()
+    if not path_id or row is None:
+        raise LookupError(f"{normalize(path)}: not in snapshot {snap['restic_id'][:8]}")
+    return {"type": NODE_TYPES[row["type"]], "size": row["size"], "mtime_us": row["mtime_us"]}
+
+
 def history(con: sqlite3.Connection, snap: sqlite3.Row, path: str) -> list[dict]:
     """A path across the visible snapshots of `snap`'s series: one point per snapshot with
     whether it existed and its size (directories: totals below it) and mtime."""

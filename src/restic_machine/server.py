@@ -36,7 +36,7 @@ from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, backup, config, db, excludes, query, retention, schedule
+from . import __version__, backup, config, db, excludes, files, query, retention, schedule
 from .indexer import IndexBusy, Indexer, timestamp_us
 from .restic import RepositoryUnavailable, Restic, ResticError
 
@@ -47,7 +47,7 @@ _STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     **{f"/{name}": (name, "text/javascript; charset=utf-8")
-       for name in ("app.js", "backups.js", "common.js", "retention.js", "settings.js")},
+       for name in ("app.js", "backups.js", "common.js", "compare.js", "retention.js", "settings.js")},
 }
 # Read once, with the code: a server keeps serving the page that goes with it even if the files
 # are updated while it runs (a new page against an old server breaks). Restart to get a new version.
@@ -89,6 +89,7 @@ class App:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._snapshots_cache = None  # (repo, when, `restic snapshots`)
+        self._texts = {}  # (snapshot id, path) -> lines, for comparing: a snapshot never changes
         self.connect_repository()
 
     def connect_repository(self) -> bool:
@@ -135,6 +136,19 @@ class App:
 
     def connect(self):
         return db.connect(self.require_repo().index_path)
+
+    def snapshot_text(self, snap, path: str, info: dict) -> list[str]:
+        """A text file as it was in a snapshot, remembered for the next comparisons."""
+        key = (snap["restic_id"], path)
+        with self._lock:
+            if key in self._texts:
+                return self._texts[key]
+        lines = files.snapshot_text(self.require_repo().restic, snap, path, info)
+        with self._lock:
+            self._texts[key] = lines
+            while len(self._texts) > 16:
+                del self._texts[next(iter(self._texts))]  # the oldest
+        return lines
 
     def idle(self) -> bool:
         return (self.idle_timeout is not None and not self.indexing["running"]
@@ -215,6 +229,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_error(url.path, f"repository temporarily unavailable: {e}", HTTPStatus.SERVICE_UNAVAILABLE)
         except LookupError as e:
             self._send_error(url.path, e.args[0] if e.args else str(e), HTTPStatus.NOT_FOUND)
+        except files.FileError as e:
+            self._send_error(url.path, str(e), HTTPStatus.CONFLICT)
         except Exception as e:
             if self._client_gone():
                 return  # stopped because the browser gave up on it: nobody to answer
@@ -307,6 +323,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._tree(params))
         elif path == "/api/history":
             self._send_json(self._history(params))
+        elif path == "/api/diff":
+            self._send_json(self._diff(params))
         elif path == "/api/settings":
             self._send_json(self._settings())
         elif path == "/api/retention":
@@ -343,6 +361,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(self._exclude(self._json_body()))
         elif path == "/api/excludes/remove":
             self._send_json(self._include(self._json_body()))
+        elif path == "/api/restore":
+            self._send_json(self._restore(self._json_body()))
         elif path == "/api/backup/settings":
             self._send_json(self._save_backup(self._json_body()))
         elif path == "/api/backup/install":
@@ -614,6 +634,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
             snap = query.find_snapshot(con, _required(params, "snapshot"))
             points = query.history(con, snap, path)
         return {"path": path, "points": points}
+
+    # -- a file: restore it, compare its versions ---------------------------------------------
+
+    def _restore(self, body: dict) -> dict:
+        """The file as it was in the snapshot, next to the original (files.restored_path)."""
+        path = query.normalize(_required(body, "path"))
+        with closing(self.app.connect()) as con:
+            snap = query.find_snapshot(con, _required(body, "snapshot"))
+            info = query.entry(con, snap, path)
+        return {"target": str(files.restore(self.app.require_repo().restic, snap, path, info))}
+
+    def _diff(self, params: dict) -> dict:
+        """Two versions of a text file side by side: `left` and `right` are each a snapshot id
+        or `disk` (the file as it is now)."""
+        path = query.normalize(_required(params, "path"))
+        native = excludes.native_path(path)
+        sides = {}
+        for side in ("left", "right"):
+            source = _required(params, side)
+            if source == "disk":
+                sides[side] = files.disk_text(native)
+                continue
+            with closing(self._connect_for_reading()) as con:
+                snap = query.find_snapshot(con, source)
+                try:
+                    info = query.entry(con, snap, path)
+                except LookupError:
+                    sides[side] = None  # not in that snapshot
+                    continue
+            sides[side] = self.app.snapshot_text(snap, path, info)
+        rows, changes = files.side_by_side(sides["left"] or [], sides["right"] or [])
+        return {"path": path, "native": native, "rows": rows, "changes": changes,
+                "missing": {side: lines is None for side, lines in sides.items()}}
 
 
 def _forget_command(policy: dict) -> str:

@@ -4,6 +4,7 @@ import {
   $, api, count, el, formatDate, formatDay, formatSize, mtimeDate, post, snapshotDate, svg,
 } from "./common.js";
 import * as backups from "./backups.js";
+import { initCompare, isText, openCompare } from "./compare.js";
 import * as retention from "./retention.js";
 import * as settings from "./settings.js";
 
@@ -541,6 +542,9 @@ function entryRow(entry, path, depth, parentSize, removed) {
     onclick: () => openDetail(path),
   }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
     svg("polyline", { points: "1,13 5,8 8,10 11,4 15,6", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }))),
+  // a removed file is restored or compared as it was in the snapshot that still had it
+  isText(entry) ? compareButton(entry, path, removed ? state.previous : state.snapshot) : null,
+  entry.type === "file" ? restoreButton(entry, path, removed ? state.previous : state.snapshot) : null,
   removed || !state.excludes ? null : excludeButton(entry, path)));
   if (isDir) row.addEventListener("contextmenu", (event) => openMenu(event, path));
   return row;
@@ -620,6 +624,51 @@ function collapseAll(path) {
     if (open === path || open.startsWith(`${path === "/" ? "" : path}/`)) state.expanded.delete(open);
   }
   loadTree();
+}
+
+// ---- a file: compare its versions, restore it ------------------------------------------
+
+function compareButton(entry, path, snapshot) {
+  return el("button", {
+    type: "button", class: "history", title: "Compare its versions line by line",
+    "aria-label": `Compare versions of ${entry.name}`, onclick: () => openCompare(path, snapshot),
+  }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
+    svg("rect", { x: 1.5, y: 2, width: 5.5, height: 12, rx: 1, fill: "none", stroke: "currentColor", "stroke-width": 1.4 }),
+    svg("rect", { x: 9, y: 2, width: 5.5, height: 12, rx: 1, fill: "none", stroke: "currentColor", "stroke-width": 1.4 }),
+    svg("line", { x1: 3, y1: 6, x2: 5.5, y2: 6, stroke: "currentColor", "stroke-width": 1.4 }),
+    svg("line", { x1: 10.5, y1: 9, x2: 13, y2: 9, stroke: "currentColor", "stroke-width": 1.4 })));
+}
+
+function restoreButton(entry, path, snapshot) {
+  return el("button", {
+    type: "button", class: "history", title: "Restore it as it was in this snapshot (next to the file, with the date in its name)",
+    "aria-label": `Restore ${entry.name}`, onclick: () => restoreFile(entry, path, snapshot),
+  }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
+    svg("path", { d: "M3.5 6.5 A5 5 0 1 1 3 9.5", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }),
+    svg("polyline", { points: "1.5,3.5 3.5,6.8 6.8,5", fill: "none", stroke: "currentColor", "stroke-width": 1.6 })));
+}
+
+// The name it gets, as the server makes it: name_YYYYMMDD-HHMM.ext
+function restoredName(name, date) {
+  const dot = name.lastIndexOf(".");
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${stem}_${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${ext}`;
+}
+
+async function restoreFile(entry, path, snapshot) {
+  const snap = state.snapshots.find((s) => s.id === snapshot);
+  const date = snap ? snapshotDate(snap) : null;
+  if (!confirm(`Restore this file as it was on ${formatDate(date)}?\n\n${entry.native || path}\n\n` +
+    `It is written next to it as ${date ? restoredName(entry.name, date) : "name_date"}; ` +
+    "the file there now is left as it is.")) return;
+  showBanner(`Restoring ${entry.name}…`);
+  try {
+    const data = await post("/api/restore", { snapshot, path });
+    showBanner(`Restored: ${data.target}`);
+  } catch (error) {
+    showBanner(`Not restored: ${error.message}`, true);
+  }
 }
 
 // ---- excluding from the next backups ---------------------------------------------------
@@ -840,6 +889,7 @@ function bind() {
   });
   window.addEventListener("scroll", closeMenu, { passive: true });
   settings.init({ ready: becameReady });
+  initCompare();
   backups.init();
   retention.init();
 }

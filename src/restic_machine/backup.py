@@ -13,6 +13,8 @@
    needs administrator rights, which the scheduled task has).
 4. On the run at the prune time, or when the last prune is more than 30 hours old (the computer
    was off), the retention policy: `restic forget` + prune.
+5. restic-machine's own index reads the new snapshot (and forgets what the prune removed), so
+   the page has it at once instead of reading days of backups when it next opens.
 
 Everything, restic's output included, goes to backup.log next to the index.
 """
@@ -21,10 +23,14 @@ import ctypes
 import os
 import socket
 import subprocess
+import time
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config
+from . import config, db
+from .indexer import Indexer
+from .restic import Restic
 
 PRUNE_CATCH_UP = timedelta(hours=30)
 PRUNE_SPACING = timedelta(hours=12)
@@ -170,6 +176,31 @@ def prune_due(cfg: config.Config, now: datetime) -> bool:
     return (near and now - last > PRUNE_SPACING) or now - last > PRUNE_CATCH_UP
 
 
+def update_index(cfg: config.Config, env: dict, log: Log) -> None:
+    """Read what changed in the repository (the new snapshot, what a prune forgot) into the
+    index. A failure here leaves the backup as it is: the page reads what is missing when it
+    opens."""
+    started = time.monotonic()
+    restic = Restic(cfg.restic_binary)
+    restic.env = env  # the backup's own: the repository through the share it logged into
+    forgotten = []
+
+    def progress(event: str, **info) -> None:
+        if event == "forgotten":
+            forgotten.append(info["count"])
+
+    try:
+        repository_id = restic.repository_id()
+        db.remember_repository(cfg.data_dir, cfg.repository_label(), repository_id)
+        with closing(db.open_index(cfg.data_dir, repository_id)) as con:
+            read = Indexer(con, restic, progress=progress).run()
+    except Exception as e:  # never the backup's failure
+        log.line(f"index: not updated ({type(e).__name__}: {e}); the page reads what is missing when it opens")
+        return
+    gone = f", {sum(forgotten)} forgotten" if sum(forgotten) else ""
+    log.line(f"index: {read} new snapshot{'' if read == 1 else 's'} read{gone} ({time.monotonic() - started:.0f} s)")
+
+
 def run(cfg: config.Config, prune: str = "auto") -> int:
     """One backup run; returns 0 or restic's exit code. `prune`: auto, always or never."""
     settings = cfg.backup
@@ -226,6 +257,7 @@ def run(cfg: config.Config, prune: str = "auto") -> int:
                     log.line(f"ERROR: forget/prune failed ({code})")
                     return code
                 _last_prune_file().write_text(now.isoformat(timespec="seconds"), encoding="utf-8")
+        update_index(cfg, env, log)
         log.line("OK")
         return 0
     except (BackupError, OSError) as e:

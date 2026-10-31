@@ -21,10 +21,14 @@ In your browser you get:
   and what is new, modified or removed since the previous snapshot; Ctrl+click a second
   snapshot to see only what changed between the two, with the change in size (another
   Ctrl+click swaps one of them, so there are always two); the size of
-  any file or folder over time; and a button to leave a file or folder out of the next
+  any file or folder over time; a button to restore a file as it was in the snapshot (next
+  to it, with the snapshot's date and time in its name: `notes_20261024-1600.txt`; nothing
+  is overwritten); for text files, a window to compare any two of its versions, or one with
+  the file on disk now, line by line; and a button to leave a file or folder out of the next
   backups (it adds the path to your backup's exclude file).
 - **Scheduler:** what is backed up and when; restic-machine makes it a scheduled task of the
-  system that runs the backups on its own.
+  system that runs the backups on its own, and after each backup reads the new snapshot into
+  its index, so the page has it at once.
 - **Retention:** the retention policy (which snapshots to keep), a calendar of what it
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.
