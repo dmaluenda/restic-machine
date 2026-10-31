@@ -24,7 +24,7 @@ const state = {
   excludes: false,        // whether an exclude file is set, so entries can be excluded
   sort: { key: "name", asc: true },
   showRemoved: false,
-  detailPath: null,
+  detailPath: "/",        // what the side panel shows: the root at first, then what was clicked
   lastDone: 0,
   stopped: false,
 };
@@ -169,7 +169,7 @@ async function loadSnapshots() {
   const shown = current();
   if (shown?.indexed) {
     renderSnapshotInfo();
-    if (state.cacheKey !== treeKey()) await loadTree();
+    if (state.cacheKey !== treeKey() && await loadTree() && state.detailPath) await openDetail(state.detailPath);
     return;
   }
   const latest = [...state.snapshots].reverse().find((s) => s.indexed);
@@ -510,9 +510,10 @@ function entryRow(entry, path, depth, parentSize, removed) {
     ? el("button", { type: "button", class: "twisty", "aria-expanded": open ? "true" : "false",
       "aria-label": `${open ? "Close" : "Open"} ${entry.name}`, onclick: () => toggleFolder(path) }, open ? "▾" : "▸")
     : el("span", { class: "twisty", "aria-hidden": "true" }, entry.type === "symlink" ? "↪" : "");
+  // A click on a row shows it in the side panel; on a folder's name it also opens or closes it.
   const name = el("button", {
     type: "button", class: "link name",
-    onclick: isDir ? () => toggleFolder(path) : () => openDetail(path),
+    onclick: isDir ? () => { openDetail(path); toggleFolder(path); } : () => openDetail(path),
   }, entry.name,
   entry.excluded ? el("span", { class: "badge excluded", title: `Excluded from the next backups by: ${entry.excluded}` },
     "excluded") : null);
@@ -537,15 +538,14 @@ function entryRow(entry, path, depth, parentSize, removed) {
   el("td", { class: "num" }, isDir ? count(entry.files) : ""),
   el("td", {}, formatDate(mtimeDate(entry.mtime_us))),
   el("td", {}, status ? el("span", { class: `badge ${status}` }, STATUS_LABEL[status]) : ""),
-  el("td", { class: "actions-cell" }, el("button", {
-    type: "button", class: "history", title: "Size over time", "aria-label": `Size of ${entry.name} over time`,
-    onclick: () => openDetail(path),
-  }, svg("svg", { width: 16, height: 16, viewBox: "0 0 16 16", "aria-hidden": "true" },
-    svg("polyline", { points: "1,13 5,8 8,10 11,4 15,6", fill: "none", stroke: "currentColor", "stroke-width": 1.6 }))),
+  el("td", { class: "actions-cell" },
   // a removed file is restored or compared as it was in the snapshot that still had it
   isText(entry) ? compareButton(entry, path, removed ? state.previous : state.snapshot) : null,
   entry.type === "file" ? restoreButton(entry, path, removed ? state.previous : state.snapshot) : null,
   removed || !state.excludes ? null : excludeButton(entry, path)));
+  row.addEventListener("click", (event) => {
+    if (!event.target.closest("button")) openDetail(path);
+  });
   if (isDir) row.addEventListener("contextmenu", (event) => openMenu(event, path));
   return row;
 }
@@ -570,9 +570,7 @@ function openMenu(event, path) {
     item("Expand one level", () => expandOneLevel(path)),
     item("Expand changes", () => expandBelow(path, true)),
     item("Expand all", () => expandBelow(path, false)),
-    item("Collapse all", () => collapseAll(path)),
-    el("hr"),
-    item("Size over time", () => openDetail(path)));
+    item("Collapse all", () => collapseAll(path)));
   menu.hidden = false;
   const { innerWidth, innerHeight } = window;
   const box = menu.getBoundingClientRect();
@@ -731,11 +729,7 @@ async function openDetail(path) {
   for (const row of document.querySelectorAll("#listing tbody tr")) {
     row.classList.toggle("selected", row.dataset.path === path);
   }
-  const detail = $("#detail");
-  const wasHidden = detail.hidden;
-  detail.hidden = false;
-  if (wasHidden) detail.scrollIntoView({ block: "nearest" });
-  $("#detail-title").textContent = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
+  $("#detail-title").textContent = path === "/" ? "Everything" : path.slice(path.lastIndexOf("/") + 1);
   $("#detail-path").textContent = path;
   let data;
   try {
@@ -749,12 +743,6 @@ async function openDetail(path) {
   if (state.detailPath !== path) return;  // another one was opened meanwhile
   renderChart(data.points);
   renderVersions(data.points);
-}
-
-function closeDetail() {
-  state.detailPath = null;
-  $("#detail").hidden = true;
-  for (const row of document.querySelectorAll("#listing tbody tr.selected")) row.classList.remove("selected");
 }
 
 function renderChart(points) {
@@ -847,7 +835,7 @@ function bind() {
     state.snapshot = null;
     state.compare = null;
     state.lastPick = null;
-    closeDetail();
+    state.detailPath = "/";
     loadSnapshots();
   });
   $("#show-removed").addEventListener("change", (event) => {
@@ -861,7 +849,6 @@ function bind() {
       renderTree();
     });
   }
-  $("#detail-close").addEventListener("click", closeDetail);
   $("#bars").addEventListener("keydown", (event) => {
     const moves = { ArrowLeft: -1, ArrowRight: 1, Home: -Infinity, End: Infinity };
     if (!(event.key in moves)) return;
@@ -887,7 +874,7 @@ function bind() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMenu();
   });
-  window.addEventListener("scroll", closeMenu, { passive: true });
+  $(".listing").addEventListener("scroll", closeMenu, { passive: true });  // the tree scrolls in its box
   settings.init({ ready: becameReady });
   initCompare();
   backups.init();

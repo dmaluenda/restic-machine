@@ -20,8 +20,9 @@ In your browser you get:
   open too, to what they had), with the size and file count of every folder,
   and what is new, modified or removed since the previous snapshot; Ctrl+click a second
   snapshot to see only what changed between the two, with the change in size (another
-  Ctrl+click swaps one of them, so there are always two); the size of
-  any file or folder over time; a button to restore a file as it was in the snapshot (next
+  Ctrl+click swaps one of them, so there are always two); a side panel with the size over
+  time of everything, or of the file or folder you click; the menu bar, the timeline and the
+  panel stay in place while the tree scrolls; a button to restore a file as it was in the snapshot (next
   to it, with the snapshot's date and time in its name: `notes_20261024-1600.txt`; nothing
   is overwritten); for text files, a window to compare any two of its versions, or one with
   the file on disk now, line by line; and a button to leave a file or folder out of the next
