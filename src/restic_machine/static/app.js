@@ -24,7 +24,8 @@ const state = {
   excludes: false,        // whether an exclude file is set, so entries can be excluded
   sort: { key: "name", asc: true },
   showRemoved: false,
-  detailPath: "/",        // what the side panel shows: the root at first, then what was clicked
+  detailPath: "/",        // what the side panel shows: the initial path at first, then what was clicked
+  scrollTo: null,         // a path to bring into view once the tree is read (the initial path)
   lastDone: 0,
   stopped: false,
 };
@@ -385,6 +386,13 @@ async function loadTree() {
     state.expanded = restoreExpanded();
     state.autoOpen = !state.expanded;  // first visit: open folders that are alone in their parent
     state.expanded ??= new Set();
+    // Where Browse opens (the initial path of the settings): the folders down to it open, the
+    // side panel shows it, and the tree scrolls to it once read.
+    const start = state.status?.initial_path || "/";
+    const parts = start.split("/").filter(Boolean);
+    parts.forEach((_, i) => state.expanded.add(`/${parts.slice(0, i + 1).join("/")}`));
+    state.detailPath = start;
+    state.scrollTo = start;
   }
   if (state.cacheKey !== key) state.previous = null;  // known again once read
   renderSnapshotInfo();  // what is being read, with the spinner next to it
@@ -412,6 +420,11 @@ async function loadTree() {
     writeHash(false);
     renderSnapshotInfo();
     renderTree();
+    if (state.scrollTo) {
+      [...$("#listing tbody").children].find((row) => row.dataset.path === state.scrollTo)
+        ?.scrollIntoView({ block: "center" });
+      state.scrollTo = null;
+    }
     return true;
   } catch (error) {
     if (!controller.signal.aborted) setNote(error.message);

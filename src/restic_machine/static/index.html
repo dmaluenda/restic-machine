@@ -277,6 +277,14 @@
         <p class="hint">Browse adds the paths you exclude to this file, so they are left out from the next backup on.</p>
       </fieldset>
       <fieldset>
+        <legend>Browser</legend>
+        <label class="wide">Initial path
+          <input name="initial_path" spellcheck="false" placeholder="/ (everything) — e.g. /C/Users/me/Documents">
+        </label>
+        <p class="hint">Where the Browser opens: the folders down to it open, and the side panel shows it. As restic
+          names it (<code>/C/Users/me</code>); <code>C:\Users\me</code> works too.</p>
+      </fieldset>
+      <fieldset>
         <legend>Index</legend>
         <label class="wide">Index folder
           <input name="data_dir" spellcheck="false">

@@ -394,7 +394,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                           for row in con.execute("SELECT * FROM series ORDER BY id")]
         return {"version": __version__, "ready": self.app.repo is not None, "problem": self.app.problem,
                 "repository": self.app.repo.repository_id if self.app.repo else None,
-                "name": self.app.cfg.name, "series": series,
+                "name": self.app.cfg.name, "initial_path": self.app.cfg.initial_path, "series": series,
                 "indexing": self.app.indexing, "attribution": ATTRIBUTION, "license": LICENSE,
                 "source": "/source"}
 

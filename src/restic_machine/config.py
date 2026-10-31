@@ -78,6 +78,7 @@ class Config:
     excludes_file: Path | None = None  # the --exclude-file of the backup job
     backup: dict = field(default_factory=lambda: normalize_backup({}))  # see normalize_backup()
     name: str = ""  # what the user calls the repository (shown with its id)
+    initial_path: str = "/"  # where Browse opens, as restic names it (see browse_path)
     source: Path | None = None
 
     def _effective(self, var: str) -> str | None:
@@ -122,6 +123,7 @@ class Config:
             "forgotten_retention_days": self.forgotten_retention_days,
             "excludes_file": str(self.excludes_file) if self.excludes_file else "",
             "name": self.name,
+            "initial_path": self.initial_path,
             "env_names": sorted(k for k, v in self.restic_env.items()
                                 if v is not None and k not in _RESTIC_KEYS.values()),
         }
@@ -147,6 +149,8 @@ class Config:
             new.data_dir = Path(value).expanduser() if value else default_data_dir()
         if "name" in values:
             new.name = str(values["name"] or "").strip()
+        if "initial_path" in values:
+            new.initial_path = browse_path(values["initial_path"])
         if "excludes_file" in values:
             value = str(values["excludes_file"] or "").strip()
             new.excludes_file = Path(value).expanduser() if value else None
@@ -156,6 +160,15 @@ class Config:
                 raise ConfigError("forgotten_retention_days must be a whole number of days")
             new.forgotten_retention_days = days
         return new
+
+
+def browse_path(text) -> str:
+    """A path as Browse (and restic) names it: C:\\Users\\me or C:/Users/me becomes
+    /C/Users/me; /home/me stays; empty is the root, /."""
+    text = str(text or "").strip().replace("\\", "/")
+    if re.match(r"[A-Za-z]:(/|$)", text):
+        text = f"/{text[0]}{text[2:]}"
+    return "/" + "/".join(part for part in text.split("/") if part)
 
 
 def normalize_policy(raw: dict, where: str = "retention policy") -> dict:
@@ -296,6 +309,7 @@ def load(path: Path | None = None) -> Config:
     if "retention" in raw:
         cfg.retention = normalize_policy(raw["retention"], f"{path} [retention]")
     cfg.name = str(raw.get("repository", {}).get("name", "")).strip()
+    cfg.initial_path = browse_path(raw.get("browse", {}).get("initial_path", ""))
     backup = raw.get("backup", {})
     cfg.backup = normalize_backup(backup, f"{path} [backup]")
     if backup.get("excludes_file"):
@@ -336,6 +350,8 @@ def dump(cfg: Config) -> str:
         index.append(f"forgotten_retention_days = {cfg.forgotten_retention_days}")
     if index:
         lines += ["[index]", *index, ""]
+    if cfg.initial_path != "/":
+        lines += ["[browse]", f"initial_path = {_toml(cfg.initial_path)}", ""]
     backup, default = cfg.backup, normalize_backup({})
     plain = [f"{key} = {_toml(backup[key])}" for key in ("sources", "use_fs_snapshot", "lock_name")
              if backup[key] != default[key]]

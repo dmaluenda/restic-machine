@@ -45,6 +45,11 @@
 # What you call this repository; the page shows it next to the repository's id.
 # name = "Laptop"
 
+[browse]
+# Where Browse opens (the folders down to it open, and the side panel shows it). As restic
+# names it: /C/Users/me/Documents (C:\Users\me\Documents is accepted too). Default: /
+# initial_path = "/home/me/projects"
+
 [backup]
 # What `restic-machine backup` (run by the schedule) backs up.
 # sources = ["C:/Users/me"]

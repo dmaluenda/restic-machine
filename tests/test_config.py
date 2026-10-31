@@ -99,6 +99,17 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(config.ConfigError):
             cfg.with_settings({"forgotten_retention_days": "a week"})
 
+    def test_initial_path_as_restic_names_it(self):
+        for given, expected in (("", "/"), ("/", "/"), ("C:\\Users\\me\\My Docs\\", "/C/Users/me/My Docs"),
+                                ("C:/Users/me", "/C/Users/me"), ("c:", "/c"), ("/home/me//x", "/home/me/x")):
+            self.assertEqual(config.browse_path(given), expected, given)
+        cfg = config.Config(source=self.dir / "config.toml").with_settings({"initial_path": "C:\\Users\\me\\My Docs"})
+        config.save(cfg)
+        self.assertIn('initial_path = "/C/Users/me/My Docs"', cfg.path.read_text(encoding="utf-8"))
+        self.assertEqual(config.load(cfg.path).initial_path, "/C/Users/me/My Docs")
+        config.save(cfg.with_settings({"initial_path": ""}))
+        self.assertNotIn("[browse]", cfg.path.read_text(encoding="utf-8"))  # the root is the default
+
 
 if __name__ == "__main__":
     unittest.main()
