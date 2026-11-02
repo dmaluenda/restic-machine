@@ -38,7 +38,10 @@ In your browser you get:
 
 - **Scheduler:** what is backed up and when; restic-machine makes it a scheduled task of the
   system that runs the backups on its own, and after each backup reads the new snapshot into
-  its index, so the page has it at once.
+  its index, so the page has it at once. After the prune it can also check the repository
+  (`restic check --read-data-subset n/N`): its whole structure, and a different part of its
+  data each day, so all of it is read every N days. Since nobody watches a scheduled task, a
+  command of yours (`on_failure` in the config file) can tell you when a run fails.
 - **Retention:** the retention policy (which snapshots to keep), a calendar of what it
   would leave on any day from today on (with the backups still to come), and a check with
   restic itself of what it would keep and remove right now, and why.
@@ -126,7 +129,8 @@ repository, the password file, and press *Test connection*, then *Save*. Then:
   `restic-machine backup` on its own, with restic-machine closed and nobody logged in; Windows
   asks for administrator rights to create it (the task runs with them, for VSS snapshots of files
   in use) and keeps **no password** for it.
-- **Retention:** which snapshots to keep. The backup run at the prune time applies it.
+- **Retention:** which snapshots to keep. The backup run at the prune time applies it (and
+  then checks the repository, if you set it under Scheduler).
 
 ## Usage
 

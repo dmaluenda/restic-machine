@@ -64,10 +64,18 @@
 # password_file = "~/.config/restic/share-password"
 # by_ip = true                # Windows allows one login per server name
 
-# When. The run at prune_at also applies the retention policy (forget + prune).
+# A command to run when a backup run fails (nobody watches a scheduled task): it gets the failed
+# step in RESTIC_MACHINE_FAILED (setup, backup, forget or check), the error in RESTIC_MACHINE_ERROR
+# and the log file in RESTIC_MACHINE_LOG.
+# on_failure = "notify-send 'restic-machine' 'the backup failed'"
+
+# When. The run at prune_at also applies the retention policy (forget + prune), and then, with
+# check_days = N, runs `restic check --read-data-subset n/N`: the repository's structure, and a
+# different 1/N of its data each day of the month, so all of it is read every N days.
 # [backup.schedule]
 # every_hours = 1
 # from = "08:00"
 # to = "23:00"
 # also_at = ["04:00"]
 # prune_at = "04:00"
+# check_days = 30             # 0: no check

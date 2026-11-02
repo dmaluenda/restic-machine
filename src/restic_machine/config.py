@@ -255,8 +255,8 @@ def _time_of_day(value, what: str) -> str:
 
 
 def normalize_backup(raw: dict, where: str = "backup settings") -> dict:
-    """Check the [backup] settings (sources, VSS, the repository's Windows share, the schedule)
-    and fill in the defaults. The exclude file is kept apart (Config.excludes_file)."""
+    """Check the [backup] settings (sources, VSS, the repository's Windows share, the schedule,
+    the check after the prune, what to run when a run fails) and fill in the defaults. The exclude file is kept apart (Config.excludes_file)."""
     sources = raw.get("sources", [])
     if isinstance(sources, str):
         sources = [line.strip() for line in sources.splitlines() if line.strip()]
@@ -272,6 +272,11 @@ def normalize_backup(raw: dict, where: str = "backup settings") -> dict:
     also_at = schedule.get("also_at", [])
     if isinstance(also_at, str):
         also_at = [part for part in re.split(r"[,\s]+", also_at) if part]
+    check_days = schedule.get("check_days", 0)
+    if not isinstance(check_days, int) or isinstance(check_days, bool) or not 0 <= check_days <= 366:
+        raise ConfigError(f"{where}: check_days must be a whole number of days (0 for no check)")
+    if not isinstance(raw.get("on_failure", ""), str):
+        raise ConfigError(f"{where}: on_failure must be a command line")
     for name in ("use_fs_snapshot", "by_ip"):
         value = raw.get(name, True) if name == "use_fs_snapshot" else share.get(name, True)
         if not isinstance(value, bool):
@@ -280,13 +285,15 @@ def normalize_backup(raw: dict, where: str = "backup settings") -> dict:
         "sources": [x.strip() for x in sources],
         "use_fs_snapshot": raw.get("use_fs_snapshot", True),
         "lock_name": str(raw.get("lock_name") or "Global\\restic-machine-backup"),
+        "on_failure": raw.get("on_failure", "").strip(),
         "share": {"path": str(share.get("path", "")).strip(), "user": str(share.get("user", "")).strip(),
                   "password_file": str(share.get("password_file", "")).strip(), "by_ip": share.get("by_ip", True)},
         "schedule": {"every_hours": every,
                      "from": _time_of_day(schedule.get("from", "08:00"), f"{where}: from"),
                      "to": _time_of_day(schedule.get("to", "23:00"), f"{where}: to"),
                      "also_at": sorted({_time_of_day(t, f"{where}: also_at") for t in also_at}),
-                     "prune_at": _time_of_day(schedule.get("prune_at", "04:00"), f"{where}: prune_at")},
+                     "prune_at": _time_of_day(schedule.get("prune_at", "04:00"), f"{where}: prune_at"),
+                     "check_days": check_days},
     }
 
 
@@ -394,7 +401,7 @@ def dump(cfg: Config) -> str:
                   *(f"{key} = {_toml(item[key])}" for key in ("name", "location", "copied_at", "share_user",
                                                                 "share_password_file") if item[key]), ""]
     backup, default = cfg.backup, normalize_backup({})
-    plain = [f"{key} = {_toml(backup[key])}" for key in ("sources", "use_fs_snapshot", "lock_name")
+    plain = [f"{key} = {_toml(backup[key])}" for key in ("sources", "use_fs_snapshot", "lock_name", "on_failure")
              if backup[key] != default[key]]
     if cfg.excludes_file:
         plain.insert(0, f"excludes_file = {_toml(str(cfg.excludes_file))}")

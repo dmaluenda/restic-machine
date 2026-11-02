@@ -672,7 +672,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         raw = body.get("settings") or {}
         current = self.app.cfg.backup
         try:
-            settings = config.normalize_backup({**raw, "lock_name": current["lock_name"]})
+            settings = config.normalize_backup({**raw, "lock_name": current["lock_name"],
+                                                "on_failure": current["on_failure"]})
             schedule.check(settings["schedule"])
         except (config.ConfigError, schedule.ScheduleError) as e:
             raise ApiError(HTTPStatus.BAD_REQUEST, str(e)) from None

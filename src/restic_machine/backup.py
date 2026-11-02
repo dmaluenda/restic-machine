@@ -13,10 +13,16 @@
    needs administrator rights, which the scheduled task has).
 4. On the run at the prune time, or when the last prune is more than 30 hours old (the computer
    was off), the retention policy: `restic forget` + prune.
-5. restic-machine's own index reads the new snapshot (and forgets what the prune removed), so
+5. Then, if asked (check_days = N), `restic check --read-data-subset n/N`: the whole structure of
+   the repository, and a different 1/N of its data each day of the month, so every pack is read
+   in N days. Right after the prune, which rewrites packs, is when a damage would show.
+6. restic-machine's own index reads the new snapshot (and forgets what the prune removed), so
    the page has it at once instead of reading days of backups when it next opens.
 
-Everything, restic's output included, goes to backup.log next to the index.
+Everything, restic's output included, goes to backup.log next to the index. When a run fails,
+the on_failure command (if any) runs, with the failed step (RESTIC_MACHINE_FAILED: setup,
+backup, forget or check), the error (RESTIC_MACHINE_ERROR) and the log (RESTIC_MACHINE_LOG) in its
+environment: to tell someone, since nobody watches a scheduled task.
 """
 
 import ctypes
@@ -34,6 +40,7 @@ from .restic import Restic
 
 PRUNE_CATCH_UP = timedelta(hours=30)
 PRUNE_SPACING = timedelta(hours=12)
+ON_FAILURE_TIMEOUT = 600
 _NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
@@ -176,6 +183,29 @@ def prune_due(cfg: config.Config, now: datetime) -> bool:
     return (near and now - last > PRUNE_SPACING) or now - last > PRUNE_CATCH_UP
 
 
+def check_subset(check_days: int, now: datetime) -> str:
+    """The part of the data to read today: n/N, n by the day of the month (the 31st repeats the
+    1st when N is 30)."""
+    return f"{(now.day - 1) % check_days + 1}/{check_days}"
+
+
+def on_failure(command: str, step: str, error: str, log: Log) -> None:
+    """Run the on_failure command; its own failure is only logged."""
+    if not command:
+        return
+    env = {**os.environ, "RESTIC_MACHINE_FAILED": step, "RESTIC_MACHINE_ERROR": error,
+           "RESTIC_MACHINE_LOG": log.file.name}
+    log.line(f"on_failure: {command}")
+    try:
+        code = subprocess.run(command, shell=os.name != "nt", env=env, stdin=subprocess.DEVNULL, stdout=log.file,
+                              stderr=subprocess.STDOUT, timeout=ON_FAILURE_TIMEOUT, **_NO_WINDOW).returncode
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.line(f"on_failure: could not run it ({type(e).__name__}: {e})")
+        return
+    if code != 0:
+        log.line(f"on_failure: exited with {code}")
+
+
 def update_index(cfg: config.Config, env: dict, log: Log) -> None:
     """Read what changed in the repository (the new snapshot, what a prune forgot) into the
     index. A failure here leaves the backup as it is: the page reads what is missing when it
@@ -211,6 +241,13 @@ def run(cfg: config.Config, prune: str = "auto") -> int:
     log = Log(log_file(cfg))
     lock = SingleRun(settings["lock_name"])
     unc = None
+    step = "setup"
+
+    def failed(error: str, code: int) -> int:
+        log.line(f"ERROR: {error}")
+        on_failure(settings["on_failure"], step, error, log)
+        return code
+
     try:
         if not lock.acquire():
             log.line("SKIP: another backup run is still going")
@@ -231,6 +268,7 @@ def run(cfg: config.Config, prune: str = "auto") -> int:
         env["RESTIC_REPOSITORY"] = repository
         env.pop("RESTIC_REPOSITORY_FILE", None)
 
+        step = "backup"
         command = [cfg.restic_binary, "backup", *settings["sources"]]
         if cfg.excludes_file:
             command += ["--exclude-file", str(cfg.excludes_file)]
@@ -240,11 +278,11 @@ def run(cfg: config.Config, prune: str = "auto") -> int:
         code = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=log.file,
                               stderr=subprocess.STDOUT, **_NO_WINDOW).returncode
         if code != 0:
-            log.line(f"ERROR: backup failed ({code})")
-            return code
+            return failed(f"backup failed ({code})", code)
 
         now = datetime.now()
         if prune == "always" or (prune == "auto" and prune_due(cfg, now)):
+            step = "forget"
             if not config.has_rules(cfg.retention):
                 log.line("no retention policy set: nothing forgotten or pruned")
             else:
@@ -254,15 +292,24 @@ def run(cfg: config.Config, prune: str = "auto") -> int:
                 code = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=log.file,
                                       stderr=subprocess.STDOUT, **_NO_WINDOW).returncode
                 if code != 0:
-                    log.line(f"ERROR: forget/prune failed ({code})")
-                    return code
+                    return failed(f"forget/prune failed ({code})", code)
                 _last_prune_file().write_text(now.isoformat(timespec="seconds"), encoding="utf-8")
+            if settings["schedule"]["check_days"]:
+                step = "check"
+                command = [cfg.restic_binary, "check", "--read-data-subset",
+                           check_subset(settings["schedule"]["check_days"], now)]
+                log.line("restic " + " ".join(command[1:]))
+                started = time.monotonic()
+                code = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=log.file,
+                                      stderr=subprocess.STDOUT, **_NO_WINDOW).returncode
+                if code != 0:
+                    return failed(f"check found problems or could not finish ({code})", code)
+                log.line(f"check: no errors ({time.monotonic() - started:.0f} s)")
         update_index(cfg, env, log)
         log.line("OK")
         return 0
     except (BackupError, OSError) as e:
-        log.line(f"ERROR: {e}")
-        return 1
+        return failed(str(e), 1)
     finally:
         if unc:
             disconnect_share(unc)

@@ -36,6 +36,7 @@ function fill() {
   f.to.value = s.schedule.to;
   f.also_at.value = s.schedule.also_at.join(", ");
   f.prune_at.value = s.schedule.prune_at;
+  f.check_days.value = s.schedule.check_days;
   f.sources.value = s.sources.join("\n");
   f.use_fs_snapshot.checked = s.use_fs_snapshot;
   f.share_path.value = s.share.path;
@@ -55,7 +56,7 @@ function values() {
     share: { path: f.share_path.value.trim(), user: f.share_user.value.trim(),
       password_file: f.share_password_file.value.trim(), by_ip: f.share_by_ip.checked },
     schedule: { every_hours: Number(f.every_hours.value || 0), from: f.from.value, to: f.to.value,
-      also_at: f.also_at.value, prune_at: f.prune_at.value },
+      also_at: f.also_at.value, prune_at: f.prune_at.value, check_days: Number(f.check_days.value || 0) },
   };
 }
 
@@ -65,8 +66,11 @@ function summarize() {
   if (s.every_hours) parts.push(`${s.every_hours === 1 ? "every hour" : `every ${s.every_hours} hours`} from ${s.from} to ${s.to}`);
   const also = s.also_at.split(/[,\s]+/).filter(Boolean);
   if (also.length) parts.push(`at ${also.join(", ")}`);
+  const check = s.check_days
+    ? `, then checks the repository and reads 1/${s.check_days} of its data, a different part each day`
+    : "";
   $("#schedule-summary").textContent = parts.length
-    ? `Backups ${parts.join(", and ")}; the one at ${s.prune_at.slice(0, 2)}:xx also forgets and prunes (or the next one, after 30 hours without).`
+    ? `Backups ${parts.join(", and ")}; the one at ${s.prune_at.slice(0, 2)}:xx also forgets and prunes${check} (or the next one, after 30 hours without).`
     : "No backups at all with this schedule.";
 }
 

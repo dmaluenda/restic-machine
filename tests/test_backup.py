@@ -5,8 +5,10 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -24,11 +26,11 @@ class SettingsTest(unittest.TestCase):
     def test_defaults_and_checks(self):
         settings = config.normalize_backup({})
         self.assertEqual(settings["schedule"], {"every_hours": 1, "from": "08:00", "to": "23:00",
-                                                "also_at": [], "prune_at": "04:00"})
+                                                "also_at": [], "prune_at": "04:00", "check_days": 0})
         settings = config.normalize_backup({"sources": "C:/a\nC:/b\n", "schedule": {"also_at": "4:00, 13:30"}})
         self.assertEqual((settings["sources"], settings["schedule"]["also_at"]), (["C:/a", "C:/b"], ["04:00", "13:30"]))
         for wrong in ({"sources": [""]}, {"schedule": {"from": "8h"}}, {"schedule": {"every_hours": 30}},
-                      {"use_fs_snapshot": "yes"}):
+                      {"use_fs_snapshot": "yes"}, {"schedule": {"check_days": -1}}, {"on_failure": ["x"]}):
             with self.assertRaises(config.ConfigError, msg=wrong):
                 config.normalize_backup(wrong)
 
@@ -53,6 +55,12 @@ class SettingsTest(unittest.TestCase):
         self.assertIn("-m restic_machine --config \"C:", script)
         self.assertIn("Disable-ScheduledTask -TaskName 'old backup'", script)
         self.assertNotIn("Password", script.replace("-LogonType S4U", ""))
+
+    def test_the_check_reads_a_different_part_each_day(self):
+        self.assertEqual(backup.check_subset(30, datetime(2026, 11, 1, 4)), "1/30")
+        self.assertEqual(backup.check_subset(30, datetime(2026, 11, 30, 4)), "30/30")
+        self.assertEqual(backup.check_subset(30, datetime(2026, 12, 31, 4)), "1/30")
+        self.assertEqual(backup.check_subset(7, datetime(2026, 11, 9, 4)), "2/7")
 
     def test_share_paths(self):
         cfg = config.Config(backup=config.normalize_backup({"share": {"path": r"\\nas\backups", "by_ip": False}}))
@@ -98,7 +106,8 @@ class RunTest(unittest.TestCase):
             cfg = config.Config(restic_binary=RESTIC, restic_env=env, excludes_file=tmp / "excludes.txt",
                                 retention={"keep_last": 1, "prune": True}, data_dir=tmp / "data",
                                 backup=config.normalize_backup({"sources": [str(tmp / "src")], "use_fs_snapshot": False,
-                                                                "lock_name": f"Local\\restic-machine-run-{os.getpid()}"}))
+                                                                "lock_name": f"Local\\restic-machine-run-{os.getpid()}",
+                                                                "schedule": {"check_days": 30}}))
             with mock.patch.dict(os.environ, {"RESTIC_MACHINE_DATA": str(tmp / "data")}):
                 self.assertEqual(backup.run(cfg, prune="never"), 0)
                 (tmp / "src" / "a.txt").write_text("hello again")
@@ -109,6 +118,8 @@ class RunTest(unittest.TestCase):
             self.assertEqual(len(json.loads(listing)), 1)  # keep_last 1 after the prune
             self.assertEqual(log.count(" OK"), 2)
             self.assertIn("restic forget --keep-last 1 --prune", log)
+            self.assertEqual(log.count("restic check --read-data-subset "), 1)  # after the prune only
+            self.assertIn("check: no errors (", log)
             # each run leaves restic-machine's index up to date: the new snapshot in, the pruned one out
             self.assertIn("index: 1 new snapshot read (", log)
             self.assertIn("index: 1 new snapshot read, 1 forgotten (", log)
@@ -119,6 +130,27 @@ class RunTest(unittest.TestCase):
                                    env=clean).stdout.decode()
             self.assertIn("a.txt", files)
             self.assertNotIn("skip.tmp", files)
+
+    def test_a_failure_runs_on_failure(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            tmp = Path(tmp)
+            (tmp / "src").mkdir()
+            told = tmp / "told.txt"
+            script = tmp / "tell.py"
+            script.write_text("import os, pathlib\npathlib.Path(os.environ['TOLD']).write_text("
+                              "os.environ['RESTIC_MACHINE_FAILED'] + '|' + os.environ['RESTIC_MACHINE_ERROR'])\n")
+            env = {"RESTIC_REPOSITORY": str(tmp / "no-repo"), "RESTIC_PASSWORD": "test-only",
+                   "RESTIC_CACHE_DIR": str(tmp / "cache"), "RESTIC_REPOSITORY_FILE": None,
+                   "RESTIC_PASSWORD_FILE": None, "RESTIC_PASSWORD_COMMAND": None}
+            command = subprocess.list2cmdline([sys.executable, str(script)]) if os.name == "nt" \
+                else f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+            cfg = config.Config(restic_binary=RESTIC, restic_env=env, data_dir=tmp / "data",
+                                backup=config.normalize_backup({"sources": [str(tmp / "src")], "use_fs_snapshot": False,
+                                                                "lock_name": f"Local\\restic-machine-fail-{os.getpid()}",
+                                                                "on_failure": command}))
+            with mock.patch.dict(os.environ, {"RESTIC_MACHINE_DATA": str(tmp / "data"), "TOLD": str(told)}):
+                self.assertNotEqual(backup.run(cfg, prune="never"), 0)  # no repository there
+            self.assertTrue(told.read_text().startswith("backup|backup failed ("))
 
     def test_prune_waits_for_its_time_on_a_first_run(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"RESTIC_MACHINE_DATA": tmp}):
